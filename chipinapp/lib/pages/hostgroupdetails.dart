@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:math';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HostGroupDetailsPage extends StatefulWidget {
   final Map<String, dynamic> subscription;
@@ -16,34 +18,26 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
   bool _isCopied = false;
   bool _showInMarket = false;
   late String _inviteCode;
+  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
 
   @override
   void initState() {
     super.initState();
-    _inviteCode = _generateInviteCode();
-
-    // Use mock data if subscription is empty
-    final data = widget.subscription.isEmpty
-        ? {'showInMarket': false}
-        : widget.subscription;
+    _inviteCode = widget.subscription['inviteCode'] ?? _generateInviteCode();
+    final data = widget.subscription;
     _showInMarket = data['showInMarket'] ?? false;
   }
 
   String _generateInviteCode() {
     final random = Random();
-
-    // สุ่มตัวอักษร 3 ตัว (A-Z)
     String letters = '';
     for (int i = 0; i < 3; i++) {
-      letters += String.fromCharCode(random.nextInt(26) + 65); // A-Z
+      letters += String.fromCharCode(random.nextInt(26) + 65);
     }
-
-    // สุ่มตัวเลข 4 ตัว (0-9)
     String numbers = '';
     for (int i = 0; i < 4; i++) {
       numbers += random.nextInt(10).toString();
     }
-
     return '$letters-$numbers';
   }
 
@@ -52,7 +46,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
     setState(() {
       _isCopied = true;
     });
-
     Timer(const Duration(seconds: 1), () {
       if (mounted) {
         setState(() {
@@ -60,6 +53,58 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
         });
       }
     });
+  }
+
+  Future<void> _updateMarketStatus(bool value) async {
+    setState(() {
+      _showInMarket = value;
+    });
+
+    final String? docId = widget.subscription['id'];
+    if (docId != null) {
+      try {
+        await FirebaseFirestore.instance.collection('groups').doc(docId).update(
+          {'showInMarket': value},
+        );
+      } catch (e) {
+        if (mounted) setState(() => _showInMarket = !value);
+      }
+    }
+  }
+
+  Future<void> _deleteGroup() async {
+    final String? docId = widget.subscription['id'];
+    Navigator.of(context).pop();
+
+    if (docId != null) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) =>
+            const Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+
+      try {
+        await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(docId)
+            .delete();
+
+        if (mounted) {
+          Navigator.of(context).pop();
+          Navigator.of(context).pop();
+        }
+      } catch (e) {
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text("เกิดข้อผิดพลาด: $e")));
+        }
+      }
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   void _showDeleteConfirmationDialog() {
@@ -107,9 +152,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
+                      onPressed: () => Navigator.of(context).pop(),
                       style: TextButton.styleFrom(
                         splashFactory: NoSplash.splashFactory,
                         overlayColor: Colors.transparent,
@@ -123,10 +166,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () {
-                        Navigator.pop(context); // Close dialog
-                        Navigator.pop(context); // Go back to previous page
-                      },
+                      onPressed: _deleteGroup,
                       style: TextButton.styleFrom(
                         splashFactory: NoSplash.splashFactory,
                         overlayColor: Colors.transparent,
@@ -153,50 +193,44 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Mock data
-    final Map<String, dynamic> subscriptionData = widget.subscription.isEmpty
-        ? {
-            'name': 'Netflix Premium',
-            'logo': 'assets/images/netflix.png',
-            'price': '105',
-            'showInMarket': false,
-            'members': [
-              {'name': 'poonbcw', 'status': 'Paid', 'isMe': true},
-              {
-                'name': 'bambiiisadeer',
-                'status': 'Paid',
-                'email': 'bambii@example.com',
-              },
-              {
-                'name': 'amour',
-                'status': 'Unpaid',
-                'email': 'amour@example.com',
-              },
-              {
-                'name': 'lengsab',
-                'status': 'Pending',
-                'email': 'lengsab@example.com',
-              },
-            ],
-          }
-        : widget.subscription;
+    final Map<String, dynamic> subscriptionData = widget.subscription;
 
-    final List<dynamic> members =
-        subscriptionData['members'] ??
-        [
-          {'name': 'poonbcw', 'status': 'Paid', 'isMe': true},
-          {
-            'name': 'bambiiisadeer',
-            'status': 'Paid',
-            'email': 'bambii@example.com',
-          },
-          {'name': 'amour', 'status': 'Unpaid', 'email': 'amour@example.com'},
-          {
-            'name': 'lengsab',
-            'status': 'Pending',
-            'email': 'lengsab@example.com',
-          },
-        ];
+    List<dynamic> rawMembers = subscriptionData['members'] ?? [];
+
+    // ⭐ ดึงข้อมูล Member Names และ Status
+    Map<String, dynamic> memberNames = subscriptionData['memberNames'] ?? {};
+    Map<String, dynamic> memberStatus = subscriptionData['memberStatus'] ?? {};
+
+    List<Map<String, dynamic>> displayMembers = [];
+
+    for (var memberUid in rawMembers) {
+      bool isMe = memberUid == currentUserId;
+      bool isHost = memberUid == subscriptionData['createdBy'];
+
+      // หาชื่อ
+      String displayName = "Member";
+      if (isHost) {
+        displayName = subscriptionData['creatorName'] ?? 'Host';
+      } else if (memberNames.containsKey(memberUid)) {
+        displayName = memberNames[memberUid];
+      }
+
+      // หาสถานะ
+      String status = "Unpaid";
+      if (isHost) {
+        status = "Paid";
+      } else if (memberStatus.containsKey(memberUid)) {
+        String s = memberStatus[memberUid];
+        status = s[0].toUpperCase() + s.substring(1);
+      }
+
+      displayMembers.add({
+        'name': isMe ? "$displayName (Me)" : displayName,
+        'status': status,
+        'isMe': isMe,
+        'email': '',
+      });
+    }
 
     return Theme(
       data: Theme.of(context).copyWith(
@@ -215,8 +249,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
             onPressed: () => Navigator.pop(context),
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
           ),
           title: const Text(
             "Subscription Detail",
@@ -231,8 +263,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
             IconButton(
               icon: const Icon(Icons.delete_outlined, color: Colors.black),
               onPressed: _showDeleteConfirmationDialog,
-              splashColor: Colors.transparent,
-              highlightColor: Colors.transparent,
             ),
           ],
         ),
@@ -245,7 +275,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header with logo and price
                 Row(
                   children: [
                     Container(
@@ -254,7 +283,10 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         image: DecorationImage(
-                          image: AssetImage(subscriptionData['logo'] ?? ''),
+                          image: AssetImage(
+                            subscriptionData['logo'] ??
+                                'assets/images/netflix.png',
+                          ),
                           fit: BoxFit.cover,
                           onError: (exception, stackTrace) {},
                         ),
@@ -263,7 +295,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                     ),
                     const SizedBox(width: 12.0),
                     Text(
-                      subscriptionData['name'] ?? 'Unknown Service',
+                      subscriptionData['serviceName'] ?? 'Unknown Service',
                       style: const TextStyle(
                         fontSize: 14.0,
                         fontWeight: FontWeight.w500,
@@ -272,7 +304,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                     ),
                     const Spacer(),
                     Text(
-                      "${subscriptionData['price'] ?? '0'} THB",
+                      "${subscriptionData['price']?.toString() ?? '0'} THB",
                       style: const TextStyle(
                         fontSize: 16.0,
                         fontWeight: FontWeight.w500,
@@ -283,7 +315,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                 ),
                 const SizedBox(height: 24.0),
 
-                // Invite Code Section
                 const Text(
                   "Invite Code",
                   style: TextStyle(
@@ -306,8 +337,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                     ),
                     InkWell(
                       onTap: () => _handleCopy(_inviteCode),
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
                       child: Container(
                         padding: const EdgeInsets.all(8.0),
                         decoration: BoxDecoration(
@@ -325,7 +354,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                 ),
                 const SizedBox(height: 20.0),
 
-                // Show in Market Toggle
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -337,17 +365,12 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                         color: Colors.black,
                       ),
                     ),
-
                     Transform.scale(
                       scale: 0.70,
                       alignment: Alignment.centerRight,
                       child: Switch(
                         value: _showInMarket,
-                        onChanged: (value) {
-                          setState(() {
-                            _showInMarket = value;
-                          });
-                        },
+                        onChanged: (value) => _updateMarketStatus(value),
                         activeTrackColor: const Color.fromARGB(255, 92, 94, 98),
                         inactiveTrackColor: Colors.grey.shade400,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -355,23 +378,12 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                           Colors.transparent,
                         ),
                         thumbColor: WidgetStateProperty.all(Colors.white),
-                        thumbIcon: WidgetStateProperty.resolveWith<Icon?>((
-                          states,
-                        ) {
-                          // ใช้ container ว่างเพื่อควบคุมขนาด
-                          return const Icon(
-                            Icons.circle,
-                            size: 10.0, // ปรับขนาดวงกลมตรงนี้
-                            color: Colors.white,
-                          );
-                        }),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 24.0),
 
-                // Members Section
                 const Text(
                   "Member",
                   style: TextStyle(
@@ -381,15 +393,16 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                   ),
                 ),
                 const SizedBox(height: 15.0),
-                ...members.map((member) {
-                  String name = member['name'] ?? '';
-                  String status = member['status'] ?? 'Unpaid';
-                  bool isMe = member['isMe'] ?? false;
-                  String email = member['email'] ?? '';
-                  String initial = name.isNotEmpty
-                      ? name[0].toUpperCase()
-                      : '?';
-                  return _buildMemberItem(initial, name, status, isMe, email);
+                ...displayMembers.map((member) {
+                  return _buildMemberItem(
+                    member['name']?.isNotEmpty == true
+                        ? member['name'][0].toUpperCase()
+                        : '?',
+                    member['name'] ?? 'Unknown',
+                    member['status'] ?? 'Unpaid',
+                    member['isMe'] ?? false,
+                    member['email'] ?? '',
+                  );
                 }),
                 const SizedBox(height: 30.0),
               ],
@@ -453,14 +466,13 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  isMe ? "$name (Me)" : name,
+                  name,
                   style: const TextStyle(
                     fontSize: 14.0,
                     color: Colors.black,
                     fontWeight: FontWeight.w400,
                   ),
                 ),
-                // แสดง email เฉพาะคนที่ไม่ใช่ (Me)
                 if (!isMe && email.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2.0),
@@ -476,7 +488,6 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
               ],
             ),
           ),
-          // ไม่แสดง status badge ถ้าเป็นคน (Me)
           if (!isMe)
             Container(
               padding: const EdgeInsets.symmetric(

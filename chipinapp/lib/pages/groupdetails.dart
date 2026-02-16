@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'addreview.dart';
 
 class GroupDetailsPage extends StatefulWidget {
@@ -17,37 +19,100 @@ class GroupDetailsPage extends StatefulWidget {
 class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _isCopied = false;
   File? _slipImage;
+  bool _isSubmitting = false;
   final ImagePicker _picker = ImagePicker();
+  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
+
+  String _getBankImage(String? bankName) {
+    switch (bankName) {
+      case 'SCB':
+        return 'assets/images/scb.png';
+      case 'Kbank':
+        return 'assets/images/kbank.png';
+      case 'Bangkok Bank':
+        return 'assets/images/bangkokbank.webp';
+      case 'Krungsri':
+        return 'assets/images/krungsri.webp';
+      case 'True Money Wallet':
+        return 'assets/images/truemoney.png';
+      default:
+        return 'assets/images/kbank.png';
+    }
+  }
 
   void _handleCopy(String text) {
     Clipboard.setData(ClipboardData(text: text));
-    setState(() {
-      _isCopied = true;
-    });
-
+    setState(() => _isCopied = true);
     Timer(const Duration(seconds: 1), () {
-      if (mounted) {
-        setState(() {
-          _isCopied = false;
-        });
-      }
+      if (mounted) setState(() => _isCopied = false);
     });
   }
 
   Future<void> _pickImage() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-
-    if (image != null) {
-      setState(() {
-        _slipImage = File(image.path);
-      });
-    }
+    if (image != null) setState(() => _slipImage = File(image.path));
   }
 
   void _removeImage() {
-    setState(() {
-      _slipImage = null;
-    });
+    setState(() => _slipImage = null);
+  }
+
+  Future<void> _submitPayment() async {
+    if (_slipImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please upload a slip first")),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final sub = widget.subscription;
+
+      String mockSlipUrl = "path/to/slip/image.png";
+
+      // ดึง username เพื่อส่งไปกับ Notification
+      String senderName = 'Member';
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user?.uid)
+          .get();
+      if (userDoc.exists) {
+        senderName = userDoc['username'] ?? user?.displayName ?? 'Member';
+      }
+
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'type': 'payment_received',
+        'category': 'check_slip',
+        'toUserId': sub['createdBy'],
+        'fromUserId': currentUserId,
+        'sender': senderName, // ✅ ใช้ชื่อจริง
+        'service': sub['serviceName'],
+        'logo': sub['logo'],
+        'groupId': sub['id'],
+        'price': "${sub['price']} THB",
+        'message': "$senderName sent payment", // ✅ ข้อความใช้ชื่อจริง
+        'timestamp': FieldValue.serverTimestamp(),
+        'slipUrl': mockSlipUrl,
+        'isRead': false,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Payment sent to Host!")));
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   void _navigateToAddReview() {
@@ -61,21 +126,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final List<dynamic> members =
-        widget.subscription['members'] ??
-        [
-          {'name': 'poonbcw'},
-          {'name': 'bambiiisadeer'},
-          {'name': 'amour'},
-        ];
+    final Map<String, dynamic> sub = widget.subscription;
+    final List<dynamic> rawMembers = sub['members'] ?? [];
 
-    final Map<String, dynamic> paymentInfo =
-        widget.subscription['paymentInfo'] ??
-        {
-          'name': 'Poon Boonchoowit',
-          'bank': 'KBank',
-          'accountNumber': '123-4-56789-1',
-        };
+    // ✅ 1. ดึง Map ชื่อสมาชิกออกมา
+    final Map<String, dynamic> memberNames = sub['memberNames'] ?? {};
+
+    final String payeeName = sub['payeeName'] ?? 'Unknown';
+    final String bankName = sub['bankName'] ?? 'Unknown Bank';
+    final String accountNumber = sub['bankAccount'] ?? '-';
+    final String bankImage = _getBankImage(bankName);
 
     return Theme(
       data: Theme.of(context).copyWith(
@@ -84,20 +144,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         hoverColor: Colors.transparent,
         focusColor: Colors.transparent,
         splashFactory: NoSplash.splashFactory,
-        textButtonTheme: TextButtonThemeData(
-          style: ButtonStyle(
-            overlayColor: WidgetStateProperty.all(Colors.transparent),
-          ),
-        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
             overlayColor: WidgetStateProperty.all(Colors.transparent),
             elevation: WidgetStateProperty.all(0),
-          ),
-        ),
-        outlinedButtonTheme: OutlinedButtonThemeData(
-          style: ButtonStyle(
-            overlayColor: WidgetStateProperty.all(Colors.transparent),
           ),
         ),
       ),
@@ -110,10 +160,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
             onPressed: () => Navigator.pop(context),
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            hoverColor: Colors.transparent,
-            focusColor: Colors.transparent,
           ),
           title: const Text(
             "Subscription Detail",
@@ -142,16 +188,17 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         image: DecorationImage(
-                          image: AssetImage(widget.subscription['logo'] ?? ''),
+                          image: AssetImage(
+                            sub['logo'] ?? 'assets/images/netflix.png',
+                          ),
                           fit: BoxFit.cover,
-                          onError: (exception, stackTrace) {},
                         ),
                         color: Colors.grey.shade200,
                       ),
                     ),
                     const SizedBox(width: 12.0),
                     Text(
-                      widget.subscription['name'] ?? 'Unknown Service',
+                      sub['serviceName'] ?? 'Unknown Service',
                       style: const TextStyle(
                         fontSize: 14.0,
                         fontWeight: FontWeight.w500,
@@ -160,7 +207,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     ),
                     const Spacer(),
                     Text(
-                      "${widget.subscription['price'] ?? '0'} THB",
+                      "${sub['price']?.toString() ?? '0'} THB",
                       style: const TextStyle(
                         fontSize: 16.0,
                         fontWeight: FontWeight.w500,
@@ -170,6 +217,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   ],
                 ),
                 const SizedBox(height: 24.0),
+
                 const Text(
                   "Members",
                   style: TextStyle(
@@ -179,13 +227,27 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   ),
                 ),
                 const SizedBox(height: 15.0),
-                ...members.map((member) {
-                  String name = member['name'] ?? '';
-                  String initial = name.isNotEmpty
-                      ? name[0].toUpperCase()
+
+                // ✅ 2. Loop แสดงชื่อโดยใช้ข้อมูลจาก memberNames
+                ...rawMembers.map((memberUid) {
+                  bool isHost = memberUid == sub['createdBy'];
+                  bool isMe = memberUid == currentUserId;
+
+                  String displayName = "Member";
+                  if (isHost) {
+                    displayName = sub['creatorName'] ?? "Host";
+                  } else if (memberNames.containsKey(memberUid)) {
+                    displayName = memberNames[memberUid]; // ดึงชื่อ
+                  }
+
+                  if (isMe) displayName = "$displayName (Me)";
+
+                  String initial = displayName.isNotEmpty
+                      ? displayName[0].toUpperCase()
                       : '?';
-                  return _buildMemberItem(initial, name);
+                  return _buildMemberItem(initial, displayName);
                 }),
+
                 const SizedBox(height: 8.0),
                 Center(
                   child: SizedBox(
@@ -195,10 +257,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       style: ButtonStyle(
                         backgroundColor: WidgetStateProperty.all(Colors.black),
                         foregroundColor: WidgetStateProperty.all(Colors.white),
-                        elevation: WidgetStateProperty.all(0),
-                        overlayColor: WidgetStateProperty.all(
-                          Colors.transparent,
-                        ),
                         shape: WidgetStateProperty.all(
                           RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(24.0),
@@ -217,6 +275,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   ),
                 ),
                 const SizedBox(height: 32.0),
+
                 const Text(
                   "Payment Info",
                   style: TextStyle(
@@ -232,12 +291,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     Container(
                       height: 37.0,
                       width: 37.0,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         image: DecorationImage(
-                          image: AssetImage('assets/images/kbank.png'),
+                          image: AssetImage(bankImage),
                           fit: BoxFit.cover,
                         ),
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
                     ),
                     const SizedBox(width: 15.0),
@@ -246,7 +306,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            paymentInfo['name'] ?? '',
+                            payeeName,
                             style: const TextStyle(
                               fontSize: 15.0,
                               color: Colors.black,
@@ -254,7 +314,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                           ),
                           const SizedBox(height: 4.0),
                           Text(
-                            paymentInfo['bank'] ?? '',
+                            bankName,
                             style: const TextStyle(
                               fontSize: 14.0,
                               color: Colors.black,
@@ -262,7 +322,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                           ),
                           const SizedBox(height: 4.0),
                           Text(
-                            paymentInfo['accountNumber'] ?? '',
+                            accountNumber,
                             style: const TextStyle(
                               fontSize: 14.0,
                               color: Colors.black,
@@ -273,34 +333,25 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     ),
                     InkWell(
                       onTap: () {
-                        if (paymentInfo['accountNumber'] != null) {
-                          _handleCopy(paymentInfo['accountNumber']);
-                        }
+                        if (accountNumber != '-') _handleCopy(accountNumber);
                       },
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
-                      hoverColor: Colors.transparent,
-                      focusColor: Colors.transparent,
                       child: Container(
                         padding: const EdgeInsets.all(8.0),
                         decoration: BoxDecoration(
-                          color: _isCopied
-                              ? Colors.grey.shade200
-                              : Colors.grey.shade200,
+                          color: Colors.grey.shade200,
                           shape: BoxShape.circle,
                         ),
                         child: Icon(
                           _isCopied ? Icons.check : Icons.copy,
                           size: 18.0,
-                          color: _isCopied
-                              ? Color.fromARGB(255, 92, 94, 98)
-                              : Color.fromARGB(255, 92, 94, 98),
+                          color: const Color.fromARGB(255, 92, 94, 98),
                         ),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 32.0),
+
                 const Text(
                   "Upload Slip",
                   style: TextStyle(
@@ -323,10 +374,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                             side: WidgetStateProperty.all(
                               const BorderSide(color: Colors.black),
                             ),
-                            overlayColor: WidgetStateProperty.all(
-                              Colors.transparent,
-                            ),
-                            elevation: WidgetStateProperty.all(0),
                             shape: WidgetStateProperty.all(
                               RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(30.0),
@@ -371,26 +418,34 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         ),
                       ),
                 const SizedBox(height: 40.0),
+
                 SizedBox(
                   height: 47.0,
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {},
+                    onPressed: _isSubmitting ? null : _submitPayment,
                     style: ButtonStyle(
                       backgroundColor: WidgetStateProperty.all(Colors.black),
                       foregroundColor: WidgetStateProperty.all(Colors.white),
-                      elevation: WidgetStateProperty.all(0),
-                      overlayColor: WidgetStateProperty.all(Colors.transparent),
                       shape: WidgetStateProperty.all(
                         RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30.0),
                         ),
                       ),
                     ),
-                    child: const Text(
-                      "Submit Payment",
-                      style: TextStyle(fontSize: 14.0),
-                    ),
+                    child: _isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            "Submit Payment",
+                            style: TextStyle(fontSize: 14.0),
+                          ),
                   ),
                 ),
                 const SizedBox(height: 30.0),
@@ -417,7 +472,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             alignment: Alignment.center,
             child: Text(
               initial,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 18.0,
                 color: Color.fromARGB(255, 92, 94, 98),
                 fontWeight: FontWeight.w500,

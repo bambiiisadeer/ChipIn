@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:math'; // 1. เพิ่ม import นี้เพื่อใช้สุ่มเลข
 
 class CreateNewGroupPage extends StatefulWidget {
   const CreateNewGroupPage({super.key});
@@ -37,6 +38,23 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
     {"name": "Krungsri", "image": "assets/images/krungsri.webp"},
     {"name": "True Money Wallet", "image": "assets/images/truemoney.png"},
   ];
+
+  // 2. ฟังก์ชันสร้าง Invite Code (สุ่มตัวอักษร 3 ตัว + ตัวเลข 4 ตัว)
+  String _generateInviteCode() {
+    final random = Random();
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+    // สุ่มตัวอักษร 3 ตัว
+    String letters = List.generate(
+      3,
+      (index) => chars[random.nextInt(chars.length)],
+    ).join();
+
+    // สุ่มตัวเลข 4 ตัว
+    String numbers = List.generate(4, (index) => random.nextInt(10)).join();
+
+    return '$letters-$numbers'; // ผลลัพธ์เช่น ABC-1234
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +103,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               _buildServiceDropdown(selectedServiceData),
               const SizedBox(height: 25.0),
               const Text(
-                "Price",
+                "Total Price",
                 style: TextStyle(fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 15.0),
@@ -120,7 +138,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               _buildBankAccountField(),
               const SizedBox(height: 25.0),
               const Text(
-                "Slots Open",
+                "Slots Open (Include yourself)",
                 style: TextStyle(fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 15.0),
@@ -142,14 +160,12 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                       : () async {
                           if (_selectedService != null &&
                               _priceController.text.isNotEmpty) {
-                            setState(
-                              () => _isLoading = true,
-                            ); // สร้างตัวแปร _isLoading ไว้จัดการ UI
+                            setState(() => _isLoading = true);
 
                             try {
                               final user = FirebaseAuth.instance.currentUser;
 
-                              // 1. คำนวณวันหมดอายุแบบง่ายๆ (อิงตาม Duration ที่กรอก)
+                              // 1. คำนวณวันหมดอายุ
                               DateTime endDate = DateTime.now();
                               int duration =
                                   int.tryParse(_durationController.text) ?? 1;
@@ -169,43 +185,52 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                                 );
                               }
 
-                              // 2. บันทึกข้อมูลลง Firestore
+                              // 2. คำนวณราคา
+                              double totalPrice =
+                                  double.tryParse(_priceController.text) ?? 0.0;
+                              int membersCount = _slotsOpen > 0
+                                  ? _slotsOpen
+                                  : 1;
+                              double pricePerPerson = totalPrice / membersCount;
+                              double formattedPrice = double.parse(
+                                pricePerPerson.toStringAsFixed(2),
+                              );
+
+                              // 3. สร้าง Invite Code ครั้งเดียวตรงนี้
+                              String newInviteCode = _generateInviteCode();
+
+                              // 4. บันทึกข้อมูลลง Firestore
                               await FirebaseFirestore.instance
                                   .collection('groups')
                                   .add({
                                     'serviceName': _selectedService,
-                                    'price':
-                                        double.tryParse(
-                                          _priceController.text,
-                                        ) ??
-                                        0.0,
+                                    'price': formattedPrice,
+                                    'totalPrice': totalPrice,
                                     'duration': duration,
                                     'durationUnit': _selectedDurationUnit,
                                     'payeeName': _nameController.text,
                                     'bankName': _selectedBank,
                                     'bankAccount': _bankAccountController.text,
                                     'maxSlots': _slotsOpen,
-                                    'availableSlots':
-                                        _slotsOpen, // เริ่มต้นเท่ากับ max
+                                    'availableSlots': _slotsOpen,
                                     'createdBy': user?.uid,
                                     'creatorName': user?.displayName,
-                                    'members': [
-                                      user?.uid,
-                                    ], // เจ้าของกลุ่มเป็นสมาชิกคนแรก
+                                    'members': [user?.uid],
                                     'createdAt': FieldValue.serverTimestamp(),
                                     'endDate': endDate,
                                     'status': 'unpaid',
                                     'logo': selectedServiceData!['image'],
+
+                                    // เพิ่มฟิลด์ inviteCode ลง Database
+                                    'inviteCode': newInviteCode,
                                   });
 
                               if (mounted) {
-                                Navigator.pop(
-                                  context,
-                                ); // กลับไปหน้าก่อนหน้าเมื่อสร้างกลุ่มเสร็จ
+                                Navigator.pop(context, true);
                               }
                             } catch (e) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
+                                SnackBar(content: Text('Error: $e')),
                               );
                             } finally {
                               if (mounted) setState(() => _isLoading = false);
@@ -218,14 +243,23 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                       borderRadius: BorderRadius.circular(25.0),
                     ),
                   ),
-                  child: const Text(
-                    "Done",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14.0,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          "Done",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14.0,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 40.0),
@@ -236,6 +270,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
     );
   }
 
+  // ... (Widget อื่นๆ เหมือนเดิม ไม่ต้องแก้)
   Widget _buildServiceDropdown(Map<String, String>? selectedServiceData) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -374,7 +409,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               style: const TextStyle(fontSize: 14.0),
               decoration: const InputDecoration(
-                hintText: "Price",
+                hintText: "Total Price",
                 hintStyle: TextStyle(color: Color(0xFF9E9E9E), fontSize: 14.0),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
