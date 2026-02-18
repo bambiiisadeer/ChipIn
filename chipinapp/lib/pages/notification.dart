@@ -25,29 +25,63 @@ class _NotificationPageState extends State<NotificationPage> {
   Future<void> _handleApprove(DocumentSnapshot notifDoc) async {
     try {
       final data = notifDoc.data() as Map<String, dynamic>;
-      final String groupId = data['groupId']; // ✅ consistent
+      final String groupId = data['groupId'];
       final String requestUserId = data['fromUserId'];
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
+
+      // เก็บข้อความเดิมไว้ก่อน (เช่น "UserA want to join your group")
+      final String originalMessage = data['message'] ?? "";
+
+      // ดึง serviceEmail จาก notification ก่อน
+      // ถ้าไม่มี (notification เก่า) ให้ fallback ไปดึงจาก memberEmails ใน group doc
+      String serviceEmail = data['serviceEmail'] ?? '';
+      if (serviceEmail.isEmpty) {
+        try {
+          final groupDoc = await FirebaseFirestore.instance
+              .collection('groups')
+              .doc(groupId)
+              .get();
+          if (groupDoc.exists) {
+            final groupData = groupDoc.data() as Map<String, dynamic>;
+            final memberEmails =
+                groupData['memberEmails'] as Map<String, dynamic>? ?? {};
+            serviceEmail = memberEmails[requestUserId] ?? '';
+          }
+        } catch (e) {
+          debugPrint("Error fetching memberEmails: $e");
+        }
+      }
 
       final DateTime deadline = DateTime.now().add(const Duration(hours: 24));
 
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
-      // 1. อัปเดต Group: เพิ่มสถานะ member + ลด slot
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId);
+
       batch.update(groupRef, {
         'memberStatus.$requestUserId': 'unpaid',
         'paymentDeadlines.$requestUserId': Timestamp.fromDate(deadline),
         'availableSlots': FieldValue.increment(-1),
       });
 
-      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น accept
-      batch.update(notifDoc.reference, {'status': 'accept'});
+      // --- ส่วนที่แก้ไข: สร้างข้อความใหม่สำหรับ Host ---
+      String updatedHostMessage = originalMessage;
+      if (serviceEmail.isNotEmpty) {
+        // ต่อท้ายด้วย email ถ้ามี
+        updatedHostMessage = "$originalMessage with email $serviceEmail";
+      }
 
-      // 3. สร้าง Notification ใหม่แจ้ง Member ว่าได้รับการอนุมัติ
+      // อัปเดตทั้ง status และ message ใหม่ลงไปที่ Notification ของ Host
+      batch.update(notifDoc.reference, {
+        'status': 'accept',
+        'message':
+            updatedHostMessage, // <--- เพิ่มบรรทัดนี้เพื่อให้ข้อความเปลี่ยน
+      });
+      // ---------------------------------------------
+
       final String day = deadline.day.toString().padLeft(2, '0');
       final String month = deadline.month.toString().padLeft(2, '0');
       final String year = deadline.year.toString();
@@ -59,15 +93,20 @@ class _NotificationPageState extends State<NotificationPage> {
           .collection('notifications')
           .doc();
 
+      // ข้อความสำหรับส่งกลับไปหา User ที่ขอ join (อันนี้โค้ดเดิมถูกแล้ว)
+      final String approveMessage = serviceEmail.isNotEmpty
+          ? "Host has been approve your request with email $serviceEmail"
+          : "Host has been approve your request";
+
       batch.set(replyRef, {
         'type': 'approved',
         'category': 'my_request',
         'toUserId': requestUserId,
         'fromUserId': currentUserId,
-        'groupId': groupId, // ✅ เพิ่ม groupId ทุก notification
+        'groupId': groupId,
         'service': serviceName,
         'logo': logo,
-        'message': "Host has been approve your request",
+        'message': approveMessage,
         'detail': "Please pay before $dateStr",
         'timestamp': FieldValue.serverTimestamp(),
         'isRead': false,
@@ -75,23 +114,20 @@ class _NotificationPageState extends State<NotificationPage> {
 
       await batch.commit();
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Error: $e")));
+      debugPrint("Error approving: $e");
     }
   }
 
   Future<void> _handleReject(DocumentSnapshot notifDoc) async {
     try {
       final data = notifDoc.data() as Map<String, dynamic>;
-      final String groupId = data['groupId']; // ✅ consistent
+      final String groupId = data['groupId'];
       final String requestUserId = data['fromUserId'];
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
 
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
-      // 1. ลบ member ออกจาก Group
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId);
@@ -100,10 +136,8 @@ class _NotificationPageState extends State<NotificationPage> {
         'memberStatus.$requestUserId': FieldValue.delete(),
       });
 
-      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น reject
       batch.update(notifDoc.reference, {'status': 'reject'});
 
-      // 3. สร้าง Notification ใหม่แจ้ง Member ว่าถูก reject
       final DocumentReference replyRef = FirebaseFirestore.instance
           .collection('notifications')
           .doc();
@@ -111,8 +145,8 @@ class _NotificationPageState extends State<NotificationPage> {
         'type': 'rejected',
         'category': 'my_request',
         'toUserId': requestUserId,
-        'fromUserId': currentUserId, // ✅ เพิ่ม fromUserId ที่หายไป
-        'groupId': groupId, // ✅ เพิ่ม groupId ทุก notification
+        'fromUserId': currentUserId,
+        'groupId': groupId,
         'service': serviceName,
         'logo': logo,
         'message': "Host has been reject your request",
@@ -219,7 +253,6 @@ class _NotificationPageState extends State<NotificationPage> {
 
         var docs = snapshot.data!.docs;
 
-        // Filter ตาม tab
         if (_selectedTab == 1) {
           docs = docs.where((d) => d['category'] == 'my_request').toList();
         } else if (_selectedTab == 2) {
@@ -233,7 +266,7 @@ class _NotificationPageState extends State<NotificationPage> {
         }
 
         if (docs.isEmpty) {
-          return const Center(child: Text("No notifications in this category"));
+          return const Center(child: Text("No notifications"));
         }
 
         return ListView.builder(
@@ -245,13 +278,11 @@ class _NotificationPageState extends State<NotificationPage> {
     );
   }
 
-  /// เช็คว่า Group ยังอยู่ไหม ถ้าไม่อยู่ให้ลบ Notification ทิ้งอัตโนมัติ
   Widget _buildNotificationCard(DocumentSnapshot doc) {
     final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
     final String? groupId = data['groupId'];
     final String type = data['type'] ?? '';
 
-    // Type ที่ต้องมี groupId เสมอ
     const groupRelatedTypes = {
       'incoming_request',
       'approved',
@@ -261,7 +292,6 @@ class _NotificationPageState extends State<NotificationPage> {
       'check_slip',
     };
 
-    // ✅ CASE 1: มี groupId → เช็คว่ากลุ่มยังอยู่ไหม
     if (groupId != null && groupId.isNotEmpty) {
       return StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
@@ -272,7 +302,6 @@ class _NotificationPageState extends State<NotificationPage> {
           if (groupSnapshot.connectionState == ConnectionState.waiting) {
             return const SizedBox.shrink();
           }
-          // กลุ่มหายไปแล้ว → ลบ notification ทิ้ง
           if (!groupSnapshot.hasData || !groupSnapshot.data!.exists) {
             Future.microtask(() {
               doc.reference.delete().catchError(
@@ -286,7 +315,6 @@ class _NotificationPageState extends State<NotificationPage> {
       );
     }
 
-    // ✅ CASE 2: ไม่มี groupId แต่เป็น type ที่ควรมี → โค้ดเก่า, ลบทิ้ง
     if (groupRelatedTypes.contains(type)) {
       Future.microtask(() {
         doc.reference.delete().catchError(
@@ -296,7 +324,6 @@ class _NotificationPageState extends State<NotificationPage> {
       return const SizedBox.shrink();
     }
 
-    // ✅ CASE 3: ไม่มี groupId และไม่ใช่ group-related → system notification แสดงปกติ
     return _renderCardContent(doc, data);
   }
 
@@ -308,13 +335,25 @@ class _NotificationPageState extends State<NotificationPage> {
     if (data['timestamp'] != null) {
       final DateTime date = (data['timestamp'] as Timestamp).toDate();
       final Duration diff = DateTime.now().difference(date);
-      if (diff.inMinutes < 60) {
+      if (diff.inMinutes < 1) {
+        timeAgo = "Just now";
+      } else if (diff.inMinutes < 60) {
         timeAgo = "${diff.inMinutes} mins ago";
       } else if (diff.inHours < 24) {
         timeAgo = "${diff.inHours} hours ago";
       } else {
         timeAgo = "${diff.inDays} days ago";
       }
+    }
+
+    String? statusText;
+    if (type == 'incoming_request' && status != 'pending') {
+      statusText = status == 'accept' ? "Request approved" : "Request rejected";
+    } else if (type == 'payment_received' &&
+        (status == 'approved' || status == 'rejected')) {
+      statusText = status == 'approved'
+          ? "Payment approved"
+          : "Payment rejected";
     }
 
     return Container(
@@ -328,69 +367,85 @@ class _NotificationPageState extends State<NotificationPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 40.0,
-                height: 40.0,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  image: DecorationImage(
-                    image: AssetImage(
-                      data['logo'] ?? 'assets/images/netflix.png',
-                    ),
-                    fit: BoxFit.cover,
-                  ),
-                  border: Border.all(color: const Color(0xFFF2F2F2)),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      data['service'] ?? 'Unknown Service',
-                      style: const TextStyle(
-                        fontSize: 14.0,
-                        fontWeight: FontWeight.w500,
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40.0,
+                    height: 40.0,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      image: DecorationImage(
+                        image: AssetImage(
+                          data['logo'] ?? 'assets/images/netflix.png',
+                        ),
+                        fit: BoxFit.cover,
                       ),
+                      border: Border.all(color: const Color(0xFFF2F2F2)),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      data['message'] ?? '',
-                      style: const TextStyle(fontSize: 14.0),
-                    ),
-                    if (data['detail'] != null) ...[
-                      const SizedBox(height: 2),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        data['detail'],
+                        data['service'] ?? 'Unknown Service',
+                        style: const TextStyle(
+                          fontSize: 14.0,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        data['message'] ?? '',
                         style: const TextStyle(fontSize: 14.0),
                       ),
+                      if (data['detail'] != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          data['detail'],
+                          style: const TextStyle(fontSize: 14.0),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(
+                        timeAgo,
+                        style: TextStyle(
+                          fontSize: 12.0,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      if (statusText != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          statusText,
+                          style: TextStyle(
+                            fontSize: 12.0,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
                     ],
-                    const SizedBox(height: 6),
-                    Text(
-                      timeAgo,
-                      style: TextStyle(fontSize: 12.0, color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
-              ),
-              if (type == 'incoming_request' && status != 'pending')
-                _buildStatusBadge(status)
-              else if (data['price'] != null)
-                Text(
-                  data['price'],
-                  style: const TextStyle(
-                    fontSize: 16.0,
-                    fontWeight: FontWeight.w500,
                   ),
                 ),
-            ],
+                if (data['price'] != null && type != 'payment_received')
+                  Text(
+                    data['price'],
+                    style: const TextStyle(
+                      fontSize: 16.0,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+              ],
+            ),
           ),
 
-          // Approve / Reject buttons
+          // ─── Approve / Reject buttons (incoming_request pending) ───
           if (type == 'incoming_request' && status == 'pending') ...[
             const SizedBox(height: 15),
             Row(
@@ -445,21 +500,18 @@ class _NotificationPageState extends State<NotificationPage> {
             ),
           ],
 
-          // Check Slip button
-          if (type == 'payment_received') ...[
+          // ─── Check Slip button (payment_received + pending เท่านั้น) ───
+          if (type == 'payment_received' && status == 'pending') ...[
             const SizedBox(height: 15),
             SizedBox(
               width: double.infinity,
               height: 40,
               child: ElevatedButton(
                 onPressed: () {
-                  // ✅ ส่ง data ของแจ้งเตือนนี้ไปที่ CheckSlipPage
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => CheckSlipPage(
-                        notificationData: data,
-                      ), // ส่ง data ไปที่นี่
+                      builder: (context) => CheckSlipPage(notificationDoc: doc),
                     ),
                   );
                 },
@@ -478,33 +530,6 @@ class _NotificationPageState extends State<NotificationPage> {
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusBadge(String status) {
-    final Color color = status == 'accept'
-        ? const Color(0xFF41A313)
-        : const Color(0xFFB1060F);
-    final Color bgColor = status == 'accept'
-        ? const Color.fromARGB(52, 65, 163, 19)
-        : const Color.fromARGB(255, 255, 214, 214);
-    final String text = status == 'accept' ? "Accepted" : "Rejected";
-    final IconData icon = status == 'accept' ? Icons.check : Icons.close;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(20.0),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 2.0),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16.0, color: color),
-          const SizedBox(width: 4),
-          Text(text, style: TextStyle(fontSize: 12.0, color: color)),
         ],
       ),
     );

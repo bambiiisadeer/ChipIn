@@ -1,7 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
-import '../local_storage.dart'; 
+import '../local_storage.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 
@@ -9,22 +9,51 @@ class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // --- ฟังก์ชันกลางสำหรับจัดการข้อมูล User ให้เป็นรูปแบบเดียวกัน ---
-  Future<void> _updateUserData(User user, String provider, {String? customUsername}) async {
+  // --- ฟังก์ชันกลางสำหรับจัดการข้อมูล User ---
+  Future<void> _updateUserData(
+    User user,
+    String provider, {
+    String? customUsername,
+  }) async {
     final userRef = _firestore.collection('users').doc(user.uid);
 
-    await userRef.set(
-      {
-        'uid': user.uid,
-        'email': user.email,
-        // ถ้ามีการส่ง username มาจากหน้า Sign Up ให้ใช้ค่านั้น ถ้าไม่มีให้ใช้ชื่อจาก Provider
-        'username': customUsername ?? user.displayName ?? user.email?.split('@')[0] ?? 'User',
-        'auth_provider': provider,
-        'created_at': FieldValue.serverTimestamp(), 
-        'average_rating': 0.0,
-      },
-      SetOptions(merge: true),
-    );
+    final docSnapshot = await userRef.get();
+    final existingData = docSnapshot.exists
+        ? docSnapshot.data() as Map<String, dynamic>
+        : null;
+
+    // ถ้ามี username อยู่แล้ว → ใช้ชื่อเดิม ไม่เขียนทับ
+    final String usernameToSave =
+        (existingData != null &&
+            existingData['username'] != null &&
+            existingData['username'].toString().isNotEmpty)
+        ? existingData['username']
+        : customUsername ??
+              user.displayName ??
+              user.email?.split('@')[0] ??
+              'User';
+
+    // ✅ ถ้ามี average_rating อยู่แล้ว → ใช้ค่าเดิม ไม่ overwrite ด้วย 0
+    final double averageRatingToSave =
+        (existingData != null && existingData['average_rating'] != null)
+        ? (existingData['average_rating'] as num).toDouble()
+        : 0.0;
+
+    // ✅ ถ้ามี review_count อยู่แล้ว → ใช้ค่าเดิม ไม่ overwrite
+    final int reviewCountToSave =
+        (existingData != null && existingData['review_count'] != null)
+        ? (existingData['review_count'] as num).toInt()
+        : 0;
+
+    await userRef.set({
+      'uid': user.uid,
+      'email': user.email,
+      'username': usernameToSave,
+      'auth_provider': provider,
+      'created_at': FieldValue.serverTimestamp(),
+      'average_rating': averageRatingToSave,
+      'review_count': reviewCountToSave,
+    }, SetOptions(merge: true));
   }
 
   // ฟังก์ชันสมัครสมาชิก (Sign Up)
@@ -39,10 +68,9 @@ class AuthService {
         email: email,
         password: password,
       );
-      
-      // เรียกใช้ฟังก์ชันกลาง และส่ง username ที่ผู้ใช้กรอกเองเข้าไปด้วย
+
       await _updateUserData(result.user!, 'email', customUsername: username);
-      
+
       print(">>> สร้างและบันทึกข้อมูลสำเร็จ: ${result.user?.uid}");
       return null;
     } catch (e) {
@@ -51,7 +79,7 @@ class AuthService {
     }
   }
 
-  // ฟังก์ชันเข้าสู่ระบบ (Login)
+  // ฟังก์ชันเข้าสู่ระบบ (Login) - email/password ไม่ต้องแตะ username เลย
   Future<String?> login({
     required String email,
     required String password,
@@ -70,15 +98,17 @@ class AuthService {
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
       if (googleUser == null) return null;
 
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      UserCredential userCredential = await _auth.signInWithCredential(credential);
+      UserCredential userCredential = await _auth.signInWithCredential(
+        credential,
+      );
 
-      // เรียกใช้ฟังก์ชันกลาง (ใช้ merge: true ภายในจะช่วยให้ไม่ทับข้อมูลเก่าถ้าเคยล็อกอินแล้ว)
       await _updateUserData(userCredential.user!, 'google');
 
       return userCredential;
@@ -99,10 +129,11 @@ class AuthService {
           result.accessToken!.tokenString,
         );
 
-        UserCredential userCredential = await _auth.signInWithCredential(credential);
+        UserCredential userCredential = await _auth.signInWithCredential(
+          credential,
+        );
         await LocalStorage.saveLoginStatus(true);
 
-        // เรียกใช้ฟังก์ชันกลาง
         await _updateUserData(userCredential.user!, 'facebook');
 
         return userCredential;

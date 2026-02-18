@@ -24,8 +24,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
   void initState() {
     super.initState();
     _inviteCode = widget.subscription['inviteCode'] ?? _generateInviteCode();
-    final data = widget.subscription;
-    _showInMarket = data['showInMarket'] ?? false;
+    _showInMarket = widget.subscription['showInMarket'] ?? false;
   }
 
   String _generateInviteCode() {
@@ -43,29 +42,25 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
 
   void _handleCopy(String text) {
     Clipboard.setData(ClipboardData(text: text));
-    setState(() {
-      _isCopied = true;
-    });
+    setState(() => _isCopied = true);
     Timer(const Duration(seconds: 1), () {
-      if (mounted) {
-        setState(() {
-          _isCopied = false;
-        });
-      }
+      if (mounted) setState(() => _isCopied = false);
     });
   }
 
   Future<void> _updateMarketStatus(bool value) async {
-    setState(() {
-      _showInMarket = value;
-    });
-
+    setState(() => _showInMarket = value);
     final String? docId = widget.subscription['id'];
     if (docId != null) {
       try {
-        await FirebaseFirestore.instance.collection('groups').doc(docId).update(
-          {'showInMarket': value},
-        );
+        final Map<String, dynamic> updateData = {
+          'showInMarket': value,
+          if (value) 'showInMarketAt': FieldValue.serverTimestamp(),
+        };
+        await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(docId)
+            .update(updateData);
       } catch (e) {
         if (mounted) setState(() => _showInMarket = !value);
       }
@@ -131,16 +126,16 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
+                    children: const [
+                      Text(
                         'Delete Subscription',
                         style: TextStyle(
                           fontWeight: FontWeight.w500,
                           fontSize: 16.0,
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      const Text(
+                      SizedBox(height: 12),
+                      Text(
                         'Are you sure you want to delete this subscription?',
                         style: TextStyle(fontSize: 14.0),
                       ),
@@ -193,223 +188,233 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final Map<String, dynamic> subscriptionData = widget.subscription;
+    final String groupId = widget.subscription['id'] ?? '';
 
-    List<dynamic> rawMembers = subscriptionData['members'] ?? [];
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        Map<String, dynamic> sub = Map<String, dynamic>.from(
+          widget.subscription,
+        );
 
-    // ⭐ ดึงข้อมูล Member Names และ Status
-    Map<String, dynamic> memberNames = subscriptionData['memberNames'] ?? {};
-    Map<String, dynamic> memberStatus = subscriptionData['memberStatus'] ?? {};
+        if (snapshot.hasData && snapshot.data!.exists) {
+          final liveData = snapshot.data!.data() as Map<String, dynamic>;
+          sub = {...liveData, 'id': groupId};
+        }
 
-    List<Map<String, dynamic>> displayMembers = [];
+        final List<dynamic> rawMembers = sub['members'] ?? [];
+        final Map<String, dynamic> memberNames = sub['memberNames'] ?? {};
+        final Map<String, dynamic> memberStatus = sub['memberStatus'] ?? {};
+        final Map<String, dynamic> memberEmails = sub['memberEmails'] ?? {};
+        final String serviceEmail = sub['serviceEmail'] ?? '';
 
-    for (var memberUid in rawMembers) {
-      bool isMe = memberUid == currentUserId;
-      bool isHost = memberUid == subscriptionData['createdBy'];
+        List<Map<String, dynamic>> displayMembers = [];
 
-      // หาชื่อ
-      String displayName = "Member";
-      if (isHost) {
-        displayName = subscriptionData['creatorName'] ?? 'Host';
-      } else if (memberNames.containsKey(memberUid)) {
-        displayName = memberNames[memberUid];
-      }
+        for (var memberUid in rawMembers) {
+          bool isMe = memberUid == currentUserId;
+          bool isHost = memberUid == sub['createdBy'];
 
-      // หาสถานะ
-      String status = "Unpaid";
-      if (isHost) {
-        status = "Paid";
-      } else if (memberStatus.containsKey(memberUid)) {
-        String s = memberStatus[memberUid];
-        status = s[0].toUpperCase() + s.substring(1);
-      }
+          String displayName = "Member";
+          if (isHost) {
+            displayName = sub['creatorName'] ?? 'Host';
+          } else if (memberNames.containsKey(memberUid)) {
+            displayName = memberNames[memberUid];
+          }
 
-      displayMembers.add({
-        'name': isMe ? "$displayName (Me)" : displayName,
-        'status': status,
-        'isMe': isMe,
-        'email': '',
-      });
-    }
+          String status = "Unpaid";
+          if (isHost) {
+            status = "Paid";
+          } else if (memberStatus.containsKey(memberUid)) {
+            String s = memberStatus[memberUid];
+            status = s[0].toUpperCase() + s.substring(1);
+          }
 
-    return Theme(
-      data: Theme.of(context).copyWith(
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        hoverColor: Colors.transparent,
-        focusColor: Colors.transparent,
-        splashFactory: NoSplash.splashFactory,
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          titleSpacing: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
-            onPressed: () => Navigator.pop(context),
+          String email = '';
+          if (!isMe) {
+            if (isHost) {
+              email = serviceEmail;
+            } else {
+              email = memberEmails[memberUid] ?? '';
+            }
+          }
+
+          displayMembers.add({
+            'name': isMe ? "$displayName (Me)" : displayName,
+            'status': status,
+            'isMe': isMe,
+            'email': email,
+          });
+        }
+
+        return Theme(
+          data: Theme.of(context).copyWith(
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            hoverColor: Colors.transparent,
+            focusColor: Colors.transparent,
+            splashFactory: NoSplash.splashFactory,
           ),
-          title: const Text(
-            "Subscription Detail",
-            style: TextStyle(
-              fontSize: 16.0,
-              fontWeight: FontWeight.w500,
-              color: Colors.black,
-            ),
-          ),
-          centerTitle: false,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.delete_outlined, color: Colors.black),
-              onPressed: _showDeleteConfirmationDialog,
-            ),
-          ],
-        ),
-        body: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 20.0,
-              vertical: 10.0,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 37.0,
-                      height: 37.0,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        image: DecorationImage(
-                          image: AssetImage(
-                            subscriptionData['logo'] ??
-                                'assets/images/netflix.png',
-                          ),
-                          fit: BoxFit.cover,
-                          onError: (exception, stackTrace) {},
-                        ),
-                        color: Colors.grey.shade200,
-                      ),
-                    ),
-                    const SizedBox(width: 12.0),
-                    Text(
-                      subscriptionData['serviceName'] ?? 'Unknown Service',
-                      style: const TextStyle(
-                        fontSize: 14.0,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      "${subscriptionData['price']?.toString() ?? '0'} THB",
-                      style: const TextStyle(
-                        fontSize: 16.0,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black,
-                      ),
-                    ),
-                  ],
+          child: Scaffold(
+            backgroundColor: Colors.white,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              titleSpacing: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
+                onPressed: () => Navigator.pop(context),
+              ),
+              title: const Text(
+                "Subscription Detail",
+                style: TextStyle(
+                  fontSize: 16.0,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.black,
                 ),
-                const SizedBox(height: 24.0),
-
-                const Text(
-                  "Invite Code",
-                  style: TextStyle(
-                    fontSize: 14.0,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black,
-                  ),
+              ),
+              centerTitle: false,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.delete_outlined, color: Colors.black),
+                  onPressed: _showDeleteConfirmationDialog,
                 ),
-                const SizedBox(height: 15.0),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _inviteCode,
-                      style: const TextStyle(
-                        fontSize: 32.0,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black,
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => _handleCopy(_inviteCode),
-                      child: Container(
-                        padding: const EdgeInsets.all(8.0),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade200,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          _isCopied ? Icons.check : Icons.copy,
-                          size: 18.0,
-                          color: const Color.fromARGB(255, 92, 94, 98),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20.0),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    const Text(
-                      "Show in Market",
-                      style: TextStyle(
-                        fontSize: 14.0,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.black,
-                      ),
-                    ),
-                    Transform.scale(
-                      scale: 0.70,
-                      alignment: Alignment.centerRight,
-                      child: Switch(
-                        value: _showInMarket,
-                        onChanged: (value) => _updateMarketStatus(value),
-                        activeTrackColor: const Color.fromARGB(255, 92, 94, 98),
-                        inactiveTrackColor: Colors.grey.shade400,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        trackOutlineColor: WidgetStateProperty.all(
-                          Colors.transparent,
-                        ),
-                        thumbColor: WidgetStateProperty.all(Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24.0),
-
-                const Text(
-                  "Member",
-                  style: TextStyle(
-                    fontSize: 14.0,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black,
-                  ),
-                ),
-                const SizedBox(height: 15.0),
-                ...displayMembers.map((member) {
-                  return _buildMemberItem(
-                    member['name']?.isNotEmpty == true
-                        ? member['name'][0].toUpperCase()
-                        : '?',
-                    member['name'] ?? 'Unknown',
-                    member['status'] ?? 'Unpaid',
-                    member['isMe'] ?? false,
-                    member['email'] ?? '',
-                  );
-                }),
-                const SizedBox(height: 30.0),
               ],
             ),
+            body: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20.0,
+                  vertical: 10.0,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 37.0,
+                          height: 37.0,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            image: DecorationImage(
+                              image: AssetImage(
+                                sub['logo'] ?? 'assets/images/netflix.png',
+                              ),
+                              fit: BoxFit.cover,
+                              onError: (exception, stackTrace) {},
+                            ),
+                            color: Colors.grey.shade200,
+                          ),
+                        ),
+                        const SizedBox(width: 12.0),
+                        Text(
+                          sub['serviceName'] ?? 'Unknown Service',
+                          style: const TextStyle(
+                            fontSize: 14.0,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          "${sub['price']?.toString() ?? '0'} THB",
+                          style: const TextStyle(
+                            fontSize: 16.0,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24.0),
+                    const Text(
+                      "Invite Code",
+                      style: TextStyle(
+                        fontSize: 14.0,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 15.0),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _inviteCode,
+                          style: const TextStyle(
+                            fontSize: 32.0,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black,
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () => _handleCopy(_inviteCode),
+                          child: Container(
+                            padding: const EdgeInsets.all(8.0),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _isCopied ? Icons.check : Icons.copy,
+                              size: 18.0,
+                              color: const Color.fromARGB(255, 92, 94, 98),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20.0),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        const Text(
+                          "Show in Market",
+                          style: TextStyle(
+                            fontSize: 14.0,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.black,
+                          ),
+                        ),
+                        const SizedBox(width: 6.0),
+                        _FixedThumbSwitch(
+                          value: _showInMarket,
+                          onChanged: _updateMarketStatus,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24.0),
+                    const Text(
+                      "Member",
+                      style: TextStyle(
+                        fontSize: 14.0,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 15.0),
+                    ...displayMembers.map((member) {
+                      return _buildMemberItem(
+                        member['name']?.isNotEmpty == true
+                            ? member['name'][0].toUpperCase()
+                            : '?',
+                        member['name'] ?? 'Unknown',
+                        member['status'] ?? 'Unpaid',
+                        member['isMe'] ?? false,
+                        member['email'] ?? '',
+                      );
+                    }),
+                    const SizedBox(height: 30.0),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -491,8 +496,8 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
           if (!isMe)
             Container(
               padding: const EdgeInsets.symmetric(
-                horizontal: 12.0,
-                vertical: 4.0,
+                horizontal: 10.0,
+                vertical: 2.0,
               ),
               decoration: BoxDecoration(
                 color: statusBgColor,
@@ -508,6 +513,55 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _FixedThumbSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _FixedThumbSwitch({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    const trackWidth = 35.0;
+    const trackHeight = 20.0;
+    const thumbRadius = 7.0;
+    const thumbDiameter = thumbRadius * 2;
+    const padding = (trackHeight - thumbDiameter) / 2;
+
+    final trackColor = value
+        ? const Color.fromARGB(255, 92, 94, 98)
+        : Colors.grey.shade400;
+
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: trackWidth,
+        height: trackHeight,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(trackHeight / 2),
+          color: trackColor,
+        ),
+        child: AnimatedAlign(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: padding),
+            child: Container(
+              width: thumbDiameter,
+              height: thumbDiameter,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

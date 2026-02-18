@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ChipIn</string>
+    <string name="facebook_app_id">25469755742707331</string>
+    <string name="fb_login_protocol_scheme">fb25469755742707331</string>
+    <string name="facebook_client_token">846cbfa8954c8400c67906d0fa7d43a5</string>
+</resources>

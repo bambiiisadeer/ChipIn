@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../pages/signup.dart';
 import '../pages/home.dart';
-
 import '../services/auth_service.dart';
 
 class SigninPage extends StatefulWidget {
@@ -19,15 +18,17 @@ class _SigninPageState extends State<SigninPage>
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
 
-  // สร้าง Controller สำหรับช่องกรอกข้อมูล
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  // สร้าง Instance ของ AuthService
   final AuthService _authService = AuthService();
 
-  // เพิ่มตัวแปรเช็คสถานะ Loading (เพื่อความสวยงามตอนกดปุ่ม)
-  bool _isLoading = false;
+  // แยก loading state ของแต่ละปุ่ม
+  bool _isSignInLoading = false;
+  bool _isGoogleLoading = false;
+
+  // ถ้าปุ่มใดปุ่มหนึ่งกำลัง loading อยู่ จะล็อคทุกปุ่มไม่ให้กดซ้อน
+  bool get _isAnyLoading => _isSignInLoading || _isGoogleLoading;
 
   @override
   void initState() {
@@ -51,31 +52,28 @@ class _SigninPageState extends State<SigninPage>
   @override
   void dispose() {
     _fadeController.dispose();
-    _emailController.dispose(); // ล้าง Controller
-    _passwordController.dispose(); // ล้าง Controller
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _handleLogin() async {
-    setState(() => _isLoading = true);
+    setState(() => _isSignInLoading = true);
 
-    // เรียกใช้ Login จาก Service
     String? result = await _authService.login(
       email: _emailController.text.trim(),
       password: _passwordController.text.trim(),
     );
 
     if (mounted) {
-      setState(() => _isLoading = false);
+      setState(() => _isSignInLoading = false);
 
       if (result == null) {
-        // Login สำเร็จ ไปหน้า Home
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
         );
       } else {
-        // Login ไม่สำเร็จ แสดงแจ้งเตือน Error
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result), backgroundColor: Colors.red),
         );
@@ -84,22 +82,19 @@ class _SigninPageState extends State<SigninPage>
   }
 
   Future<void> _handleGoogleSignIn() async {
-    setState(() => _isLoading = true);
+    setState(() => _isGoogleLoading = true);
 
-    // เรียกใช้ฟังก์ชันจาก AuthService ที่เราเพิ่ม SHA-1 และ Config ไว้แล้ว
     final result = await _authService.signInWithGoogle();
 
     if (mounted) {
-      setState(() => _isLoading = false);
+      setState(() => _isGoogleLoading = false);
 
       if (result != null) {
-        // Login สำเร็จ ไปหน้า Home
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
         );
       } else {
-        // ถ้า result เป็น null แสดงว่าผู้ใช้ยกเลิกหรือมี Error
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Google Sign-in failed or cancelled"),
@@ -109,33 +104,6 @@ class _SigninPageState extends State<SigninPage>
       }
     }
   }
-
-  Future<void> _handleFacebookSignIn() async {
-  setState(() => _isLoading = true);
-
-  // เรียกใช้ฟังก์ชันจาก AuthService
-  final result = await _authService.signInWithFacebook();
-
-  if (mounted) {
-    setState(() => _isLoading = false);
-
-    if (result != null) {
-      // ถ้าสำเร็จ ไปหน้า Home
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomePage()),
-      );
-    } else {
-      // ถ้าพลาดหรือยกเลิก แสดงแจ้งเตือน
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Facebook Sign-in failed or cancelled"),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-}
 
   @override
   Widget build(BuildContext context) {
@@ -179,12 +147,15 @@ class _SigninPageState extends State<SigninPage>
                     const SizedBox(height: 35.0),
                     TextField(
                       controller: _emailController,
-                      style: TextStyle(fontSize: 14.0, color: Colors.black),
+                      style: const TextStyle(
+                        fontSize: 14.0,
+                        color: Colors.black,
+                      ),
                       decoration: InputDecoration(
                         hintText: "Email",
-                        hintStyle: TextStyle(
+                        hintStyle: const TextStyle(
                           fontSize: 14.0,
-                          color: const Color.fromARGB(255, 92, 94, 98),
+                          color: Color.fromARGB(255, 92, 94, 98),
                         ),
                         filled: true,
                         fillColor: const Color.fromARGB(255, 242, 242, 242),
@@ -198,17 +169,19 @@ class _SigninPageState extends State<SigninPage>
                     const SizedBox(height: 20.0),
                     TextField(
                       controller: _passwordController,
-                      style: TextStyle(fontSize: 14.0, color: Colors.black),
+                      style: const TextStyle(
+                        fontSize: 14.0,
+                        color: Colors.black,
+                      ),
                       obscureText: _obscureText,
                       decoration: InputDecoration(
                         hintText: "Password",
-                        hintStyle: TextStyle(
+                        hintStyle: const TextStyle(
                           fontSize: 14.0,
-                          color: const Color.fromARGB(255, 92, 94, 98),
+                          color: Color.fromARGB(255, 92, 94, 98),
                         ),
                         filled: true,
                         fillColor: const Color.fromARGB(255, 242, 242, 242),
-
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10.0),
                           borderSide: BorderSide.none,
@@ -234,23 +207,20 @@ class _SigninPageState extends State<SigninPage>
                       ),
                     ),
                     const SizedBox(height: 35.0),
+                    // ปุ่ม Sign in — spinner เฉพาะปุ่มนี้เท่านั้น
                     GestureDetector(
-                      onTap: _isLoading
-                          ? null
-                          : _handleLogin, // ถ้ากำลัง Load อยู่จะกดไม่ได้
+                      onTap: _isAnyLoading ? null : _handleLogin,
                       child: Container(
                         height: 47.0,
                         decoration: BoxDecoration(
-                          color: _isLoading
-                              ? Colors.grey
-                              : Colors.black, // เปลี่ยนสีตอน Load
+                          color: _isAnyLoading ? Colors.grey : Colors.black,
                           borderRadius: BorderRadius.circular(25.0),
                         ),
                         child: Center(
-                          child: _isLoading
+                          child: _isSignInLoading
                               ? const CircularProgressIndicator(
                                   color: Colors.white,
-                                ) // แสดงวงกลมหมุนๆ
+                                )
                               : const Text(
                                   "Sign in",
                                   style: TextStyle(color: Colors.white),
@@ -268,7 +238,7 @@ class _SigninPageState extends State<SigninPage>
                   children: [
                     Center(
                       child: Text(
-                        "- Or  sign in with -",
+                        "Or  sign in with",
                         style: TextStyle(
                           color: const Color.fromARGB(255, 92, 94, 98),
                         ),
@@ -279,11 +249,9 @@ class _SigninPageState extends State<SigninPage>
                       mainAxisAlignment: MainAxisAlignment.center,
                       spacing: 30.0,
                       children: [
-                        // ค้นหา Container ที่ใส่รูป googlelogo.png แล้วแก้เป็นแบบนี้ครับ:
+                        // ปุ่ม Google — spinner เฉพาะปุ่มนี้เท่านั้น
                         GestureDetector(
-                          onTap: _isLoading
-                              ? null
-                              : _handleGoogleSignIn, // ป้องกันการกดซ้อนตอนโหลด
+                          onTap: _isAnyLoading ? null : _handleGoogleSignIn,
                           child: Container(
                             height: 46.0,
                             width: 46.0,
@@ -292,7 +260,7 @@ class _SigninPageState extends State<SigninPage>
                               borderRadius: BorderRadius.circular(10.0),
                               border: Border.all(width: 1.0),
                             ),
-                            child: _isLoading
+                            child: _isGoogleLoading
                                 ? const Padding(
                                     padding: EdgeInsets.all(10.0),
                                     child: CircularProgressIndicator(
@@ -304,41 +272,6 @@ class _SigninPageState extends State<SigninPage>
                                     "assets/images/googlelogo.png",
                                     height: 24.0,
                                   ),
-                          ),
-                        ),
-                        // ค้นหา Container ที่ใส่รูป facebooklogo.png และแก้เป็น:
-GestureDetector(
-  onTap: _isLoading ? null : _handleFacebookSignIn,
-  child: Container(
-    height: 46.0,
-    width: 46.0,
-    decoration: BoxDecoration(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(10.0),
-      border: Border.all(width: 1.0),
-    ),
-    child: _isLoading 
-      ? const Padding(
-          padding: EdgeInsets.all(12.0),
-          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
-        )
-      : Image.asset(
-          "assets/images/facebooklogo.png",
-          height: 24.0,
-        ),
-  ),
-),
-                        Container(
-                          height: 46.0,
-                          width: 46.0,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10.0),
-                            border: Border.all(width: 1.0),
-                          ),
-                          child: Image.asset(
-                            "assets/images/spotifylogo.png",
-                            height: 24.0,
                           ),
                         ),
                       ],
@@ -360,19 +293,24 @@ GestureDetector(
                       ),
                     ),
                     GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          PageRouteBuilder(
-                            pageBuilder:
-                                (context, animation, secondaryAnimation) =>
-                                    const SignupPage(),
-                            transitionDuration: Duration.zero,
-                            reverseTransitionDuration: Duration.zero,
-                          ),
-                        );
-                      },
-                      child: Text(
+                      onTap: _isAnyLoading
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                PageRouteBuilder(
+                                  pageBuilder:
+                                      (
+                                        context,
+                                        animation,
+                                        secondaryAnimation,
+                                      ) => const SignupPage(),
+                                  transitionDuration: Duration.zero,
+                                  reverseTransitionDuration: Duration.zero,
+                                ),
+                              );
+                            },
+                      child: const Text(
                         "Sign up",
                         style: TextStyle(decoration: TextDecoration.underline),
                       ),

@@ -9,7 +9,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Chipinapp</string>
+	<string>ChipIn</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -17,7 +17,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>chipinapp</string>
+	<string>ChipIn</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -58,15 +58,15 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.googleusercontent.apps.521994911750-q4nnkieqs7jocscb5j3oiea26cm7aa1o</string>
-				<string>fb1552371965884845</string>
+				<string>fb25469755742707331</string>
 			</array>
 		</dict>
 	</array>
 
 	<key>FacebookAppID</key>
-	<string>1552371965884845</string>
+	<string>25469755742707331</string>
 	<key>FacebookClientToken</key>
-	<string>891874b6b7427c2bfb8d0986b5f535f8</string>
+	<string>846cbfa8954c8400c67906d0fa7d43a5</string>
 	<key>FacebookDisplayName</key>
 	<string>Chipin</string>
 
@@ -79,3 +79,4 @@
 	</array>
 </dict>
 </plist>
+

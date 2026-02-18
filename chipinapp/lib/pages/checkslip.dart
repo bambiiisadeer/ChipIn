@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -27,8 +28,9 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
       // 1. อัปเดตสถานะ member ใน Group เป็น 'paid'
-      final DocumentReference groupRef =
-          FirebaseFirestore.instance.collection('groups').doc(groupId);
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId);
       batch.update(groupRef, {
         'memberStatus.$memberId': 'paid',
         'paymentDeadlines.$memberId': FieldValue.delete(),
@@ -38,8 +40,9 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
       batch.update(widget.notificationDoc.reference, {'status': 'approved'});
 
       // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment approved
-      final DocumentReference replyRef =
-          FirebaseFirestore.instance.collection('notifications').doc();
+      final DocumentReference replyRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
       batch.set(replyRef, {
         'type': 'payment_approved',
         'category': 'my_request',
@@ -55,18 +58,9 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
 
       await batch.commit();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Payment approved successfully!")),
-        );
-        Navigator.pop(context);
-      }
+      if (mounted) Navigator.pop(context);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e")),
-        );
-      }
+      debugPrint("Error approving: $e");
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -85,18 +79,18 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
       // 1. เปลี่ยนสถานะกลับเป็น 'unpaid'
-      final DocumentReference groupRef =
-          FirebaseFirestore.instance.collection('groups').doc(groupId);
-      batch.update(groupRef, {
-        'memberStatus.$memberId': 'unpaid',
-      });
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId);
+      batch.update(groupRef, {'memberStatus.$memberId': 'unpaid'});
 
       // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น rejected
       batch.update(widget.notificationDoc.reference, {'status': 'rejected'});
 
       // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment rejected
-      final DocumentReference replyRef =
-          FirebaseFirestore.instance.collection('notifications').doc();
+      final DocumentReference replyRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
       batch.set(replyRef, {
         'type': 'payment_rejected',
         'category': 'my_request',
@@ -112,18 +106,9 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
 
       await batch.commit();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Payment rejected")),
-        );
-        Navigator.pop(context);
-      }
+      if (mounted) Navigator.pop(context);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e")),
-        );
-      }
+      debugPrint("Error rejecting: $e");
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -136,7 +121,7 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
     final String serviceName = data['service'] ?? 'Unknown Service';
     final String logo = data['logo'] ?? 'assets/images/netflix.png';
     final String price = data['price'] ?? '0 THB';
-    final String slipUrl = data['slipUrl'] ?? '';
+    final String slipBase64 = data['slipBase64'] ?? '';
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -167,7 +152,6 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // Verify username
                     const SizedBox(height: 10),
                     RichText(
                       text: TextSpan(
@@ -187,13 +171,11 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
 
                     const SizedBox(height: 15),
 
-                    // Service and Price Row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Row(
                           children: [
-                            // Service Logo
                             Container(
                               width: 37.0,
                               height: 37.0,
@@ -239,18 +221,17 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
 
                     const SizedBox(height: 15),
 
-                    // Payment Slip Image
                     SizedBox(
                       width: double.infinity,
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(10.0),
-                        child: slipUrl.isNotEmpty
-                            ? Image.asset(
-                                slipUrl,
-                                fit: BoxFit.contain,
+                        child: slipBase64.isNotEmpty
+                            ? Image.memory(
+                                base64Decode(slipBase64),
+                                fit: BoxFit.fitWidth,
                                 errorBuilder: (context, error, stackTrace) {
                                   return Container(
-                                    height: 200,
+                                    width: double.infinity,
                                     color: Colors.grey.shade200,
                                     child: const Center(
                                       child: Column(
@@ -281,7 +262,6 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
             ),
           ),
 
-          // Bottom Action Buttons
           Container(
             padding: const EdgeInsets.only(
               left: 20.0,
@@ -292,7 +272,6 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
             decoration: const BoxDecoration(color: Colors.white),
             child: Row(
               children: [
-                // Reject Button
                 Expanded(
                   child: SizedBox(
                     height: 47,
@@ -327,7 +306,6 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
 
                 const SizedBox(width: 15),
 
-                // Approve Button
                 Expanded(
                   child: SizedBox(
                     height: 47,

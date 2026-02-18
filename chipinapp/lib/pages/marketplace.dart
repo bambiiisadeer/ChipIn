@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'hostprofile.dart';
 
 class MarketplacePage extends StatefulWidget {
   const MarketplacePage({super.key});
@@ -24,6 +27,204 @@ class _MarketplacePageState extends State<MarketplacePage> {
   final List<String> _sortOptions = ["Rating", "Price", "Duration"];
 
   List<Map<String, dynamic>> _marketplaceItems = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMarketplaceItems();
+  }
+
+  // ------------------------------------------------------------------ //
+  //  DATA FETCHING
+  // ------------------------------------------------------------------ //
+
+  Future<void> _fetchMarketplaceItems() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final groupsSnapshot = await FirebaseFirestore.instance
+          .collection('groups')
+          .where('showInMarket', isEqualTo: true)
+          .get();
+
+      if (groupsSnapshot.docs.isEmpty) {
+        setState(() {
+          _marketplaceItems = [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final Set<String> hostIds = groupsSnapshot.docs
+          .map((doc) => (doc.data()['createdBy'] as String?) ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+
+      final Map<String, double> hostRatings = {};
+      final List<String> hostIdList = hostIds.toList();
+
+      for (int i = 0; i < hostIdList.length; i += 10) {
+        final batch = hostIdList.sublist(
+          i,
+          i + 10 > hostIdList.length ? hostIdList.length : i + 10,
+        );
+        final usersSnapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+
+        for (final userDoc in usersSnapshot.docs) {
+          final data = userDoc.data();
+          hostRatings[userDoc.id] =
+              (data['average_rating'] as num?)?.toDouble() ?? 0.0;
+        }
+      }
+
+      final List<Map<String, dynamic>> items = groupsSnapshot.docs.map((doc) {
+        final data = doc.data();
+        final String hostId = data['createdBy'] ?? '';
+        final double rating = hostRatings[hostId] ?? 0.0;
+
+        final int durationValue = (data['duration'] as num?)?.toInt() ?? 1;
+        final String durationUnit = data['durationUnit'] ?? 'Months';
+        final String durationStr = '$durationValue $durationUnit';
+
+        final String serviceName = data['serviceName'] ?? '';
+        String category = serviceName;
+        final String serviceNameLower = serviceName.toLowerCase();
+        if (serviceNameLower.contains('netflix')) {
+          category = 'Netflix';
+        } else if (serviceNameLower.contains('spotify')) {
+          category = 'Spotify';
+        } else if (serviceNameLower.contains('youtube')) {
+          category = 'Youtube';
+        } else if (serviceNameLower.contains('disney')) {
+          category = 'Disney+';
+        }
+
+        final DateTime showInMarketAt =
+            (data['showInMarketAt'] as Timestamp?)?.toDate() ??
+            (data['createdAt'] as Timestamp?)?.toDate() ??
+            DateTime.now();
+
+        return {
+          'id': doc.id,
+          'name': serviceName,
+          'host': data['creatorName'] ?? 'Unknown',
+          'price': data['price']?.toString() ?? '0',
+          'duration': durationStr,
+          'logo': data['logo'] ?? 'assets/images/netflix.png',
+          'category': category,
+          'rating': double.parse(rating.toStringAsFixed(1)),
+          'createdBy': hostId,
+          'timestamp': showInMarketAt,
+          // เก็บ members และ availableSlots เพื่อใช้ตรวจสอบตอน join
+          'members': List<dynamic>.from(data['members'] ?? []),
+          'availableSlots': data['availableSlots'] ?? 0,
+        };
+      }).toList();
+
+      setState(() {
+        _marketplaceItems = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Marketplace fetch error: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // ------------------------------------------------------------------ //
+  //  SEND JOIN REQUEST
+  // ------------------------------------------------------------------ //
+
+  Future<void> _sendJoinRequest(
+    BuildContext context,
+    Map<String, dynamic> item,
+    String serviceEmail,
+  ) async {
+    // capture ก่อน async gap
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final List<dynamic> members = item['members'] ?? [];
+    if (members.contains(user.uid)) {
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(content: Text("You are already a member of this group")),
+      );
+      return;
+    }
+
+    if ((item['availableSlots'] ?? 0) <= 0) {
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(content: Text("This group is full")),
+      );
+      return;
+    }
+
+    try {
+      // ดึง username ของ current user
+      String currentUserName = "Unknown";
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        if (userDoc.exists) {
+          final userData = userDoc.data() as Map<String, dynamic>;
+          currentUserName =
+              userData['username'] ?? userData['email'] ?? "Unknown";
+        }
+      } catch (e) {
+        debugPrint(e.toString());
+      }
+
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(item['id']);
+      batch.update(groupRef, {
+        'members': FieldValue.arrayUnion([user.uid]),
+        'memberStatus.${user.uid}': 'pending',
+        'memberNames.${user.uid}': currentUserName,
+        'memberEmails.${user.uid}': serviceEmail,
+      });
+
+      final DocumentReference notifRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
+      batch.set(notifRef, {
+        'type': 'incoming_request',
+        'category': 'incoming_request',
+        'toUserId': item['createdBy'],
+        'fromUserId': user.uid,
+        'fromUserName': currentUserName,
+        'service': item['name'],
+        'logo': item['logo'],
+        'groupId': item['id'],
+        'price': "${item['price']} THB",
+        'status': 'pending',
+        'timestamp': FieldValue.serverTimestamp(),
+        'message': "$currentUserName want to join your group",
+        'serviceEmail': serviceEmail,
+      });
+
+      await batch.commit();
+    } catch (e) {
+      debugPrint(e.toString());
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(content: Text("Failed to send request")),
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------ //
+  //  MODALS
+  // ------------------------------------------------------------------ //
 
   void _showSuccessModal(BuildContext context) {
     showModalBottomSheet(
@@ -39,7 +240,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Handle bar
               Container(
                 width: 40,
                 height: 4,
@@ -49,8 +249,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
                 ),
               ),
               const SizedBox(height: 30),
-
-              // Success icon
               Container(
                 width: 55.0,
                 height: 55.0,
@@ -61,15 +259,11 @@ class _MarketplacePageState extends State<MarketplacePage> {
                 child: const Icon(Icons.check, color: Colors.white, size: 36),
               ),
               const SizedBox(height: 20),
-
-              // Success text
               const Text(
                 "Success !",
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 10),
-
-              // Description
               const Text(
                 "Your request has been sent,",
                 textAlign: TextAlign.center,
@@ -79,7 +273,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
                   color: Colors.black,
                 ),
               ),
-
               const Text(
                 "Please wait for the host to approve.",
                 textAlign: TextAlign.center,
@@ -90,15 +283,11 @@ class _MarketplacePageState extends State<MarketplacePage> {
                 ),
               ),
               const SizedBox(height: 30),
-
-              // Done button
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
+                  onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.black,
                     foregroundColor: Colors.white,
@@ -149,7 +338,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Handle bar
                 Container(
                   width: 40,
                   height: 4,
@@ -159,8 +347,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-
-                // Logo and Title
                 Row(
                   children: [
                     Container(
@@ -179,8 +365,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
                       ),
                     ),
                     const SizedBox(width: 15),
-
-                    // Expanded จะดัน Widget ถัดไปให้ไปสุดขอบขวา
                     Expanded(
                       child: Text(
                         item['name'],
@@ -188,24 +372,26 @@ class _MarketplacePageState extends State<MarketplacePage> {
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
                         ),
-                        overflow:
-                            TextOverflow.ellipsis, // แนะนำ: ตัดคำถ้าชื่อยาวเกิน
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-
                     TextButton(
                       onPressed: () {
-                        // TODO: Navigate to reviews page
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => HostProfilePage(
+                              hostUserId: item['createdBy'],
+                              hostUsername: item['host'],
+                            ),
+                          ),
+                        );
                       },
-                      // เพิ่ม style ตรงนี้
                       style: TextButton.styleFrom(
-                        alignment:
-                            Alignment.centerRight, // จัดข้อความในปุ่มให้ชิดขวา
-                        padding: EdgeInsets.zero, // ลบระยะห่างรอบๆ ปุ่มออก
-                        minimumSize: Size
-                            .zero, // ให้ปุ่มเล็กที่สุดเท่าที่ข้อความกินพื้นที่
-                        tapTargetSize: MaterialTapTargetSize
-                            .shrinkWrap, // ลดพื้นที่การกดให้กระชับ
+                        alignment: Alignment.centerRight,
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: const Text(
                         "See reviews",
@@ -220,16 +406,12 @@ class _MarketplacePageState extends State<MarketplacePage> {
                   ],
                 ),
                 const SizedBox(height: 20),
-
-                // Info rows
                 _buildInfoRow("By", item['host']),
                 const Divider(height: 1),
                 _buildInfoRow("Price", "${item['price']} THB"),
                 const Divider(height: 1),
                 _buildInfoRow("Duration", item['duration']),
                 const SizedBox(height: 20),
-
-                // Service Email section
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -266,19 +448,25 @@ class _MarketplacePageState extends State<MarketplacePage> {
                   ],
                 ),
                 const SizedBox(height: 20),
-
-                // Send Request button
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
                     onPressed: () {
-                      // TODO: Handle send request
                       if (emailController.text.isNotEmpty) {
-                        // Close the current modal first
+                        final email = emailController.text.trim();
+                        final scaffoldMessenger = ScaffoldMessenger.of(context);
                         Navigator.pop(context);
-                        // Show success modal
-                        _showSuccessModal(context);
+                        _sendJoinRequest(this.context, item, email).catchError((
+                          e,
+                        ) {
+                          scaffoldMessenger.showSnackBar(
+                            const SnackBar(
+                              content: Text("Failed to send request"),
+                            ),
+                          );
+                        });
+                        _showSuccessModal(this.context);
                       }
                     },
                     style: ElevatedButton.styleFrom(
@@ -328,77 +516,13 @@ class _MarketplacePageState extends State<MarketplacePage> {
     );
   }
 
-  void initState() {
-    super.initState();
-    // Mock data
-    _marketplaceItems = [
-      {
-        "name": "Netflix Premium",
-        "host": "bambiiiisadeer",
-        "price": "125",
-        "duration": "1 months",
-        "logo": "assets/images/netflix.png",
-        "category": "Netflix",
-        "rating": 5.0,
-        "timestamp": DateTime.now().subtract(const Duration(days: 20)),
-      },
-      {
-        "name": "Spotify Premium",
-        "host": "poonbcw",
-        "price": "42",
-        "duration": "1 months",
-        "logo": "assets/images/spotify.png",
-        "category": "Spotify",
-        "rating": 4.8,
-        "timestamp": DateTime.now().subtract(const Duration(days: 5)),
-      },
-      {
-        "name": "Disney+",
-        "host": "amour",
-        "price": "49",
-        "duration": "7 days",
-        "logo": "assets/images/disney+.png",
-        "category": "Disney",
-        "rating": 4.2,
-        "timestamp": DateTime.now().subtract(const Duration(days: 15)),
-      },
-      {
-        "name": "Youtube Premium",
-        "host": "poonbcw",
-        "price": "39",
-        "duration": "1 months",
-        "logo": "assets/images/youtube.png",
-        "category": "Youtube",
-        "rating": 4.7,
-        "timestamp": DateTime.now().subtract(const Duration(days: 1)),
-      },
-      {
-        "name": "Netflix Premium",
-        "host": "user123",
-        "price": "105",
-        "duration": "1 months",
-        "logo": "assets/images/netflix.png",
-        "category": "Netflix",
-        "rating": 4.3,
-        "timestamp": DateTime.now().subtract(const Duration(days: 10)),
-      },
-      {
-        "name": "Spotify Premium",
-        "host": "musiclover",
-        "price": "42",
-        "duration": "1 months",
-        "logo": "assets/images/spotify.png",
-        "category": "Spotify",
-        "rating": 4.9,
-        "timestamp": DateTime.now(),
-      },
-    ];
-  }
+  // ------------------------------------------------------------------ //
+  //  FILTERING & SORTING
+  // ------------------------------------------------------------------ //
 
   List<Map<String, dynamic>> get _filteredItems {
     var items = List<Map<String, dynamic>>.from(_marketplaceItems);
 
-    // Filter by category
     if (_selectedFilter != 0) {
       String selectedCategory = _filters[_selectedFilter];
       items = items
@@ -406,7 +530,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
           .toList();
     }
 
-    // Filter by duration
     if (_selectedDuration != "All") {
       items = items
           .where(
@@ -417,18 +540,15 @@ class _MarketplacePageState extends State<MarketplacePage> {
           .toList();
     }
 
-    // ถ้าเลือก All (ไม่ได้กรอง category) ให้เรียงตาม timestamp ก่อน
     if (_selectedFilter == 0) {
       items.sort((a, b) {
         DateTime timeA = a['timestamp'] as DateTime;
         DateTime timeB = b['timestamp'] as DateTime;
-        return timeB.compareTo(timeA); // ล่าสุดก่อน
+        return timeB.compareTo(timeA);
       });
     } else {
-      // ถ้าเลือก category เฉพาะแล้ว ถึงจะใช้ sort options
       switch (_selectedSort) {
         case "Rating":
-          // เรียงจากมากไปน้อย (สูงสุดก่อน)
           items.sort((a, b) {
             double ratingA = (a['rating'] as num?)?.toDouble() ?? 0.0;
             double ratingB = (b['rating'] as num?)?.toDouble() ?? 0.0;
@@ -436,7 +556,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
           });
           break;
         case "Price":
-          // เรียงจากน้อยไปมาก (ถูกก่อน)
           items.sort((a, b) {
             int priceA = int.tryParse(a['price'] ?? '0') ?? 0;
             int priceB = int.tryParse(b['price'] ?? '0') ?? 0;
@@ -444,7 +563,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
           });
           break;
         case "Duration":
-          // เรียงจากน้อยไปมาก (สั้นก่อน)
           items.sort((a, b) {
             int durationA = _parseDuration(a['duration'] ?? '0 days');
             int durationB = _parseDuration(b['duration'] ?? '0 days');
@@ -460,27 +578,24 @@ class _MarketplacePageState extends State<MarketplacePage> {
   int _parseDuration(String duration) {
     final parts = duration.split(' ');
     if (parts.length < 2) return 0;
-
     int value = int.tryParse(parts[0]) ?? 0;
     String unit = parts[1].toLowerCase();
-
-    if (unit.contains('month')) {
-      return value * 30;
-    } else if (unit.contains('year')) {
-      return value * 365;
-    } else if (unit.contains('day')) {
-      return value;
-    }
+    if (unit.contains('month')) return value * 30;
+    if (unit.contains('year')) return value * 365;
+    if (unit.contains('day')) return value;
     return 0;
   }
 
-  // ฟังก์ชันสำหรับรีเซ็ต sort และ duration
   void _resetFilters() {
     setState(() {
       _selectedSort = "Rating";
       _selectedDuration = "All";
     });
   }
+
+  // ------------------------------------------------------------------ //
+  //  BUILD
+  // ------------------------------------------------------------------ //
 
   @override
   Widget build(BuildContext context) {
@@ -503,7 +618,13 @@ class _MarketplacePageState extends State<MarketplacePage> {
         children: [
           _buildFilterSection(),
           const SizedBox(height: 20),
-          Expanded(child: _buildMarketplaceGrid()),
+          Expanded(
+            child: _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(color: Colors.black),
+                  )
+                : _buildMarketplaceGrid(),
+          ),
         ],
       ),
     );
@@ -512,7 +633,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
   Widget _buildFilterSection() {
     return Column(
       children: [
-        // Category filters row
         SizedBox(
           height: 40.0,
           child: _selectedFilter == 0
@@ -527,10 +647,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
                         onTap: () {
                           setState(() {
                             _selectedFilter = index;
-                            // ถ้ากดเลือก category อื่นที่ไม่ใช่ All ให้รีเซ็ต filters
-                            if (index != 0) {
-                              _resetFilters();
-                            }
+                            if (index != 0) _resetFilters();
                           });
                         },
                         child: Container(
@@ -563,7 +680,6 @@ class _MarketplacePageState extends State<MarketplacePage> {
                         onTap: () {
                           setState(() {
                             _selectedFilter = 0;
-                            // กด X กลับไป All ให้รีเซ็ต filters
                             _resetFilters();
                           });
                         },
@@ -630,8 +746,8 @@ class _MarketplacePageState extends State<MarketplacePage> {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12.0),
-          side: BorderSide(
-            color: const Color.fromARGB(255, 237, 237, 237),
+          side: const BorderSide(
+            color: Color.fromARGB(255, 237, 237, 237),
             width: 1,
           ),
         ),
@@ -639,11 +755,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
           duration: const Duration(milliseconds: 150),
           curve: Curves.easeOutCubic,
         ),
-        onSelected: (String value) {
-          setState(() {
-            _selectedSort = value;
-          });
-        },
+        onSelected: (String value) => setState(() => _selectedSort = value),
         itemBuilder: (BuildContext context) {
           return _sortOptions.map((sort) {
             return PopupMenuItem<String>(
@@ -673,12 +785,12 @@ class _MarketplacePageState extends State<MarketplacePage> {
             color: const Color.fromARGB(255, 237, 237, 237),
             borderRadius: BorderRadius.circular(12.0),
           ),
-          child: Row(
+          child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.swap_vert, color: Color(0xFF5C5E62), size: 20),
-              const SizedBox(width: 5),
-              const Text(
+              Icon(Icons.swap_vert, color: Color(0xFF5C5E62), size: 20),
+              SizedBox(width: 5),
+              Text(
                 "Sort",
                 style: TextStyle(fontSize: 14.0, color: Colors.black),
               ),
@@ -703,8 +815,8 @@ class _MarketplacePageState extends State<MarketplacePage> {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12.0),
-          side: BorderSide(
-            color: const Color.fromARGB(255, 237, 237, 237),
+          side: const BorderSide(
+            color: Color.fromARGB(255, 237, 237, 237),
             width: 1,
           ),
         ),
@@ -712,11 +824,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
           duration: const Duration(milliseconds: 150),
           curve: Curves.easeOutCubic,
         ),
-        onSelected: (String value) {
-          setState(() {
-            _selectedDuration = value;
-          });
-        },
+        onSelected: (String value) => setState(() => _selectedDuration = value),
         itemBuilder: (BuildContext context) {
           return _durationOptions.map((duration) {
             return PopupMenuItem<String>(
@@ -746,16 +854,12 @@ class _MarketplacePageState extends State<MarketplacePage> {
             color: const Color.fromARGB(255, 237, 237, 237),
             borderRadius: BorderRadius.circular(12.0),
           ),
-          child: Row(
+          child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.timer_outlined,
-                color: Color(0xFF5C5E62),
-                size: 20,
-              ),
-              const SizedBox(width: 5),
-              const Text(
+              Icon(Icons.timer_outlined, color: Color(0xFF5C5E62), size: 20),
+              SizedBox(width: 5),
+              Text(
                 "Duration",
                 style: TextStyle(fontSize: 14.0, color: Colors.black),
               ),
@@ -767,6 +871,17 @@ class _MarketplacePageState extends State<MarketplacePage> {
   }
 
   Widget _buildMarketplaceGrid() {
+    final items = _filteredItems;
+
+    if (items.isEmpty) {
+      return const Center(
+        child: Text(
+          "No listings available",
+          style: TextStyle(fontSize: 14.0, color: Colors.grey),
+        ),
+      );
+    }
+
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(15.0, 0, 15.0, 100),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -775,19 +890,14 @@ class _MarketplacePageState extends State<MarketplacePage> {
         mainAxisSpacing: 15.0,
         childAspectRatio: 0.83,
       ),
-      itemCount: _filteredItems.length,
-      itemBuilder: (context, index) {
-        final item = _filteredItems[index];
-        return _buildMarketplaceCard(item);
-      },
+      itemCount: items.length,
+      itemBuilder: (context, index) => _buildMarketplaceCard(items[index]),
     );
   }
 
   Widget _buildMarketplaceCard(Map<String, dynamic> item) {
     return GestureDetector(
-      onTap: () {
-        _showSubscriptionRequestModal(context, item);
-      },
+      onTap: () => _showSubscriptionRequestModal(context, item),
       child: Container(
         decoration: BoxDecoration(
           color: const Color.fromARGB(255, 255, 255, 255),
