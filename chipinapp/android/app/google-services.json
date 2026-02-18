@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "521994911750",
+    "project_id": "chipin-e8f4e",
+    "storage_bucket": "chipin-e8f4e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:521994911750:android:b1f68362b575b6103c0387",
+        "android_client_info": {
+          "package_name": "com.example.chipinapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "521994911750-u38357jgqdrrsqmtbheuedlanr01mp1b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.chipinapp",
+            "certificate_hash": "c6fd754840aa8fe8bb6b4d7cd5ca67a46fb24ded"
+          }
+        },
+        {
+          "client_id": "521994911750-a7smb6r1s0lsbhblmul5b2raitrl718j.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyArCoWKF4B1PvycunBgTi4ULWovEr_NHcc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "521994911750-a7smb6r1s0lsbhblmul5b2raitrl718j.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "521994911750-q4nnkieqs7jocscb5j3oiea26cm7aa1o.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.chipinapp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

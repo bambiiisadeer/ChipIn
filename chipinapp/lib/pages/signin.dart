@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../pages/signup.dart';
 import '../pages/home.dart';
+import '../services/auth_service.dart';
 
 class SigninPage extends StatefulWidget {
   const SigninPage({super.key, this.fromSignup = false});
@@ -16,6 +17,18 @@ class _SigninPageState extends State<SigninPage>
   bool _obscureText = true;
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
+
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  final AuthService _authService = AuthService();
+
+  // แยก loading state ของแต่ละปุ่ม
+  bool _isSignInLoading = false;
+  bool _isGoogleLoading = false;
+
+  // ถ้าปุ่มใดปุ่มหนึ่งกำลัง loading อยู่ จะล็อคทุกปุ่มไม่ให้กดซ้อน
+  bool get _isAnyLoading => _isSignInLoading || _isGoogleLoading;
 
   @override
   void initState() {
@@ -39,7 +52,57 @@ class _SigninPageState extends State<SigninPage>
   @override
   void dispose() {
     _fadeController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    setState(() => _isSignInLoading = true);
+
+    String? result = await _authService.login(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
+
+    if (mounted) {
+      setState(() => _isSignInLoading = false);
+
+      if (result == null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomePage()),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    setState(() => _isGoogleLoading = true);
+
+    final result = await _authService.signInWithGoogle();
+
+    if (mounted) {
+      setState(() => _isGoogleLoading = false);
+
+      if (result != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomePage()),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Google Sign-in failed or cancelled"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -83,12 +146,16 @@ class _SigninPageState extends State<SigninPage>
                     ),
                     const SizedBox(height: 35.0),
                     TextField(
-                      style: TextStyle(fontSize: 14.0, color: Colors.black),
+                      controller: _emailController,
+                      style: const TextStyle(
+                        fontSize: 14.0,
+                        color: Colors.black,
+                      ),
                       decoration: InputDecoration(
                         hintText: "Email",
-                        hintStyle: TextStyle(
+                        hintStyle: const TextStyle(
                           fontSize: 14.0,
-                          color: const Color.fromARGB(255, 92, 94, 98),
+                          color: Color.fromARGB(255, 92, 94, 98),
                         ),
                         filled: true,
                         fillColor: const Color.fromARGB(255, 242, 242, 242),
@@ -101,17 +168,20 @@ class _SigninPageState extends State<SigninPage>
                     ),
                     const SizedBox(height: 20.0),
                     TextField(
-                      style: TextStyle(fontSize: 14.0, color: Colors.black),
+                      controller: _passwordController,
+                      style: const TextStyle(
+                        fontSize: 14.0,
+                        color: Colors.black,
+                      ),
                       obscureText: _obscureText,
                       decoration: InputDecoration(
                         hintText: "Password",
-                        hintStyle: TextStyle(
+                        hintStyle: const TextStyle(
                           fontSize: 14.0,
-                          color: const Color.fromARGB(255, 92, 94, 98),
+                          color: Color.fromARGB(255, 92, 94, 98),
                         ),
                         filled: true,
                         fillColor: const Color.fromARGB(255, 242, 242, 242),
-
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10.0),
                           borderSide: BorderSide.none,
@@ -137,26 +207,24 @@ class _SigninPageState extends State<SigninPage>
                       ),
                     ),
                     const SizedBox(height: 35.0),
+                    // ปุ่ม Sign in — spinner เฉพาะปุ่มนี้เท่านั้น
                     GestureDetector(
-                      onTap: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const HomePage(),
-                          ),
-                        );
-                      },
+                      onTap: _isAnyLoading ? null : _handleLogin,
                       child: Container(
                         height: 47.0,
                         decoration: BoxDecoration(
-                          color: Colors.black,
+                          color: _isAnyLoading ? Colors.grey : Colors.black,
                           borderRadius: BorderRadius.circular(25.0),
                         ),
                         child: Center(
-                          child: Text(
-                            "Sign in",
-                            style: TextStyle(color: Colors.white),
-                          ),
+                          child: _isSignInLoading
+                              ? const CircularProgressIndicator(
+                                  color: Colors.white,
+                                )
+                              : const Text(
+                                  "Sign in",
+                                  style: TextStyle(color: Colors.white),
+                                ),
                         ),
                       ),
                     ),
@@ -170,7 +238,7 @@ class _SigninPageState extends State<SigninPage>
                   children: [
                     Center(
                       child: Text(
-                        "- Or  sign in with -",
+                        "Or  sign in with",
                         style: TextStyle(
                           color: const Color.fromARGB(255, 92, 94, 98),
                         ),
@@ -181,43 +249,29 @@ class _SigninPageState extends State<SigninPage>
                       mainAxisAlignment: MainAxisAlignment.center,
                       spacing: 30.0,
                       children: [
-                        Container(
-                          height: 46.0,
-                          width: 46.0,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10.0),
-                            border: Border.all(width: 1.0),
-                          ),
-                          child: Image.asset(
-                            "assets/images/googlelogo.png",
-                            height: 24.0,
-                          ),
-                        ),
-                        Container(
-                          height: 46.0,
-                          width: 46.0,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10.0),
-                            border: Border.all(width: 1.0),
-                          ),
-                          child: Image.asset(
-                            "assets/images/facebooklogo.png",
-                            height: 24.0,
-                          ),
-                        ),
-                        Container(
-                          height: 46.0,
-                          width: 46.0,
-                          decoration: BoxDecoration(
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10.0),
-                            border: Border.all(width: 1.0),
-                          ),
-                          child: Image.asset(
-                            "assets/images/spotifylogo.png",
-                            height: 24.0,
+                        // ปุ่ม Google — spinner เฉพาะปุ่มนี้เท่านั้น
+                        GestureDetector(
+                          onTap: _isAnyLoading ? null : _handleGoogleSignIn,
+                          child: Container(
+                            height: 46.0,
+                            width: 46.0,
+                            decoration: BoxDecoration(
+                              color: Colors.transparent,
+                              borderRadius: BorderRadius.circular(10.0),
+                              border: Border.all(width: 1.0),
+                            ),
+                            child: _isGoogleLoading
+                                ? const Padding(
+                                    padding: EdgeInsets.all(10.0),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.black,
+                                    ),
+                                  )
+                                : Image.asset(
+                                    "assets/images/googlelogo.png",
+                                    height: 24.0,
+                                  ),
                           ),
                         ),
                       ],
@@ -239,19 +293,24 @@ class _SigninPageState extends State<SigninPage>
                       ),
                     ),
                     GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          PageRouteBuilder(
-                            pageBuilder:
-                                (context, animation, secondaryAnimation) =>
-                                    const SignupPage(),
-                            transitionDuration: Duration.zero,
-                            reverseTransitionDuration: Duration.zero,
-                          ),
-                        );
-                      },
-                      child: Text(
+                      onTap: _isAnyLoading
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                PageRouteBuilder(
+                                  pageBuilder:
+                                      (
+                                        context,
+                                        animation,
+                                        secondaryAnimation,
+                                      ) => const SignupPage(),
+                                  transitionDuration: Duration.zero,
+                                  reverseTransitionDuration: Duration.zero,
+                                ),
+                              );
+                            },
+                      child: const Text(
                         "Sign up",
                         style: TextStyle(decoration: TextDecoration.underline),
                       ),

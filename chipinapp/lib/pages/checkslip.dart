@@ -1,10 +1,128 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-class CheckSlipPage extends StatelessWidget {
-  const CheckSlipPage({super.key});
+class CheckSlipPage extends StatefulWidget {
+  final DocumentSnapshot notificationDoc;
+
+  const CheckSlipPage({super.key, required this.notificationDoc});
+
+  @override
+  State<CheckSlipPage> createState() => _CheckSlipPageState();
+}
+
+class _CheckSlipPageState extends State<CheckSlipPage> {
+  bool _isProcessing = false;
+
+  Future<void> _handleApprove() async {
+    setState(() => _isProcessing = true);
+
+    try {
+      final data = widget.notificationDoc.data() as Map<String, dynamic>;
+      final String groupId = data['groupId'];
+      final String memberId = data['fromUserId'];
+      final String serviceName = data['service'];
+      final String logo = data['logo'] ?? '';
+
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      // 1. อัปเดตสถานะ member ใน Group เป็น 'paid'
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId);
+      batch.update(groupRef, {
+        'memberStatus.$memberId': 'paid',
+        'paymentDeadlines.$memberId': FieldValue.delete(),
+      });
+
+      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น approved
+      batch.update(widget.notificationDoc.reference, {'status': 'approved'});
+
+      // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment approved
+      final DocumentReference replyRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
+      batch.set(replyRef, {
+        'type': 'payment_approved',
+        'category': 'my_request',
+        'toUserId': memberId,
+        'fromUserId': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'groupId': groupId,
+        'service': serviceName,
+        'logo': logo,
+        'message': "Host has approved your payment",
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      });
+
+      await batch.commit();
+
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint("Error approving: $e");
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _handleReject() async {
+    setState(() => _isProcessing = true);
+
+    try {
+      final data = widget.notificationDoc.data() as Map<String, dynamic>;
+      final String groupId = data['groupId'];
+      final String memberId = data['fromUserId'];
+      final String serviceName = data['service'];
+      final String logo = data['logo'] ?? '';
+
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      // 1. เปลี่ยนสถานะกลับเป็น 'unpaid'
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId);
+      batch.update(groupRef, {'memberStatus.$memberId': 'unpaid'});
+
+      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น rejected
+      batch.update(widget.notificationDoc.reference, {'status': 'rejected'});
+
+      // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment rejected
+      final DocumentReference replyRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
+      batch.set(replyRef, {
+        'type': 'payment_rejected',
+        'category': 'my_request',
+        'toUserId': memberId,
+        'fromUserId': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'groupId': groupId,
+        'service': serviceName,
+        'logo': logo,
+        'message': "Host has rejected your payment. Please submit again.",
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      });
+
+      await batch.commit();
+
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint("Error rejecting: $e");
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final data = widget.notificationDoc.data() as Map<String, dynamic>;
+    final String senderName = data['sender'] ?? 'Member';
+    final String serviceName = data['service'] ?? 'Unknown Service';
+    final String logo = data['logo'] ?? 'assets/images/netflix.png';
+    final String price = data['price'] ?? '0 THB';
+    final String slipBase64 = data['slipBase64'] ?? '';
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -34,30 +152,30 @@ class CheckSlipPage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // Verify username
                     const SizedBox(height: 10),
                     RichText(
-                      text: const TextSpan(
-                        style: TextStyle(fontSize: 14.0, color: Colors.black),
+                      text: TextSpan(
+                        style: const TextStyle(
+                          fontSize: 14.0,
+                          color: Colors.black,
+                        ),
                         children: [
-                          TextSpan(
+                          const TextSpan(
                             text: "Verify ",
                             style: TextStyle(fontWeight: FontWeight.w500),
                           ),
-                          TextSpan(text: "bambiiisadeer"),
+                          TextSpan(text: senderName),
                         ],
                       ),
                     ),
 
                     const SizedBox(height: 15),
 
-                    // Service and Price Row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Row(
                           children: [
-                            // Youtube Logo
                             Container(
                               width: 37.0,
                               height: 37.0,
@@ -70,24 +188,30 @@ class CheckSlipPage extends StatelessWidget {
                               ),
                               child: ClipOval(
                                 child: Image.asset(
-                                  'assets/images/youtube.png',
+                                  logo,
                                   fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      color: Colors.grey.shade200,
+                                      child: const Icon(Icons.image),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
                             const SizedBox(width: 10),
-                            const Text(
-                              "Youtube Premium",
-                              style: TextStyle(
+                            Text(
+                              serviceName,
+                              style: const TextStyle(
                                 fontSize: 14.0,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
                         ),
-                        const Text(
-                          "49 THB",
-                          style: TextStyle(
+                        Text(
+                          price,
+                          style: const TextStyle(
                             fontSize: 16.0,
                             fontWeight: FontWeight.w500,
                           ),
@@ -97,23 +221,39 @@ class CheckSlipPage extends StatelessWidget {
 
                     const SizedBox(height: 15),
 
-                    // Payment Slip Image (ใส่ ClipRRect เพื่อทำขอบมน)
                     SizedBox(
                       width: double.infinity,
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(
-                          10.0,
-                        ), // ปรับความมนของขอบตรงนี้
-                        child: Image.asset(
-                          'assets/images/exampleslip.png',
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
-                            return const SizedBox(
-                              height: 200,
-                              child: Center(child: Text('Image not found')),
-                            );
-                          },
-                        ),
+                        borderRadius: BorderRadius.circular(10.0),
+                        child: slipBase64.isNotEmpty
+                            ? Image.memory(
+                                base64Decode(slipBase64),
+                                fit: BoxFit.fitWidth,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Container(
+                                    width: double.infinity,
+                                    color: Colors.grey.shade200,
+                                    child: const Center(
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.broken_image, size: 50),
+                                          SizedBox(height: 8),
+                                          Text('Slip image not available'),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              )
+                            : Container(
+                                height: 200,
+                                color: Colors.grey.shade200,
+                                child: const Center(
+                                  child: Text('No slip uploaded'),
+                                ),
+                              ),
                       ),
                     ),
                   ],
@@ -122,7 +262,6 @@ class CheckSlipPage extends StatelessWidget {
             ),
           ),
 
-          // Bottom Action Buttons
           Container(
             padding: const EdgeInsets.only(
               left: 20.0,
@@ -133,14 +272,11 @@ class CheckSlipPage extends StatelessWidget {
             decoration: const BoxDecoration(color: Colors.white),
             child: Row(
               children: [
-                // Reject Button
                 Expanded(
                   child: SizedBox(
                     height: 47,
                     child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
+                      onPressed: _isProcessing ? null : _handleReject,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.black,
                         side: const BorderSide(color: Colors.black, width: 1),
@@ -148,27 +284,33 @@ class CheckSlipPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(30.0),
                         ),
                       ),
-                      child: const Text(
-                        "Reject",
-                        style: TextStyle(
-                          fontSize: 14.0,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                      child: _isProcessing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black,
+                              ),
+                            )
+                          : const Text(
+                              "Reject",
+                              style: TextStyle(
+                                fontSize: 14.0,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                     ),
                   ),
                 ),
 
                 const SizedBox(width: 15),
 
-                // Approve Button
                 Expanded(
                   child: SizedBox(
                     height: 47,
                     child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
+                      onPressed: _isProcessing ? null : _handleApprove,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.black,
                         foregroundColor: Colors.white,
@@ -177,13 +319,22 @@ class CheckSlipPage extends StatelessWidget {
                         ),
                         elevation: 0,
                       ),
-                      child: const Text(
-                        "Approve",
-                        style: TextStyle(
-                          fontSize: 14.0,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                      child: _isProcessing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              "Approve",
+                              style: TextStyle(
+                                fontSize: 14.0,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                     ),
                   ),
                 ),

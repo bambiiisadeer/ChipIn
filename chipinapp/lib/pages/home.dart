@@ -1,10 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'createnewgroup.dart' as pages;
 import 'groupdetails.dart';
 import 'profile.dart';
 import 'marketplace.dart';
 import 'hostgroupdetails.dart';
+import 'hostprofile.dart';
 import 'notification.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -17,6 +21,17 @@ class _HomePageState extends State<HomePage> {
   int _filterIndex = 0;
   int _bottomNavIndex = 0;
 
+  Stream<QuerySnapshot>? _groupsStream;
+  Stream<QuerySnapshot>? _allGroupsStream;
+  String currentUserId = "";
+  String _username = "";
+
+  StreamSubscription? _usernameSubscription;
+  StreamSubscription? _authSubscription;
+
+  final TextEditingController _inviteCodeController = TextEditingController();
+  bool _isJoining = false;
+
   final List<String> _menuItems = ["All", "Host", "Member"];
 
   final List<Map<String, dynamic>> _navItems = [
@@ -26,52 +41,197 @@ class _HomePageState extends State<HomePage> {
     {"icon": Icons.person_sharp, "label": "Profile"},
   ];
 
-  final List<Map<String, dynamic>> _subscriptions = [
-    {
-      "name": "Netflix Premium",
-      "price": "105",
-      "logo": "assets/images/netflix.png",
-      "endDate": "25 Dec.",
-      "status": "Unpaid",
-      "members": [
-        {'name': 'poonbcw'},
-        {'name': 'bambiiisadeer'},
-        {'name': 'amour'},
-      ],
-      "paymentInfo": {
-        'name': 'Poon Boonchoowit',
-        'bank': 'KBank',
-        'accountNumber': '123-4-56789-1',
-      },
-    },
-    {
-      "name": "Youtube Premium",
-      "price": "49",
-      "logo": "assets/images/youtube.png",
-      "endDate": "25 Dec.",
-      "status": "Paid",
-      "members": [
-        {'name': 'poonbcw'},
-        {'name': 'user2'},
-      ],
-      "paymentInfo": {
-        'name': 'Poon Boonchoowit',
-        'bank': 'SCB',
-        'accountNumber': '987-6-54321-0',
-      },
-    },
-    {
-      "name": "Youtube Premium",
-      "price": "49",
-      "logo": "assets/images/youtube.png",
-      "endDate": "-",
-      "status": "Pending",
-      "members": [],
-      "paymentInfo": null,
-    },
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (!mounted) return;
+      if (user != null) {
+        setState(() {
+          currentUserId = user.uid;
+          _groupsStream = _createQueryStream();
+          _allGroupsStream = _createAllMemberStream();
+        });
+        _usernameSubscription?.cancel();
+        _listenToUsername();
+      } else {
+        _usernameSubscription?.cancel();
+        setState(() {
+          currentUserId = "";
+          _username = "";
+          _groupsStream = null;
+          _allGroupsStream = null;
+        });
+      }
+    });
+  }
 
-  void _showAddSubscriptionModal(BuildContext context) {
+  void _listenToUsername() {
+    if (currentUserId.isEmpty) return;
+    _usernameSubscription = FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .snapshots()
+        .listen((doc) {
+          if (doc.exists && mounted) {
+            final data = doc.data() as Map<String, dynamic>;
+            setState(() {
+              _username = data['username'] ?? data['email'] ?? "";
+            });
+          }
+        });
+  }
+
+  @override
+  void dispose() {
+    _usernameSubscription?.cancel();
+    _authSubscription?.cancel();
+    _inviteCodeController.dispose();
+    super.dispose();
+  }
+
+  Stream<QuerySnapshot> _createQueryStream() {
+    Query query = FirebaseFirestore.instance.collection('groups');
+    if (currentUserId.isEmpty) return const Stream.empty();
+    if (_filterIndex == 0) {
+      query = query.where('members', arrayContains: currentUserId);
+    } else if (_filterIndex == 1) {
+      query = query.where('createdBy', isEqualTo: currentUserId);
+    } else if (_filterIndex == 2) {
+      query = query.where('members', arrayContains: currentUserId);
+    }
+    return query.orderBy('createdAt', descending: true).snapshots();
+  }
+
+  Stream<QuerySnapshot> _createAllMemberStream() {
+    if (currentUserId.isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance
+        .collection('groups')
+        .where('members', arrayContains: currentUserId)
+        .snapshots();
+  }
+
+  void _onFilterChanged(int index) {
+    setState(() {
+      _filterIndex = index;
+      if (currentUserId.isNotEmpty) {
+        _groupsStream = _createQueryStream();
+      }
+    });
+  }
+
+  Future<void> _joinGroup(
+    BuildContext context,
+    StateSetter setModalState,
+  ) async {
+    String code = _inviteCodeController.text.trim();
+    if (code.isEmpty) return;
+    setModalState(() => _isJoining = true);
+    final navigator = Navigator.of(context);
+    try {
+      final QuerySnapshot query = await FirebaseFirestore.instance
+          .collection('groups')
+          .where('inviteCode', isEqualTo: code)
+          .limit(1)
+          .get();
+      if (query.docs.isEmpty) {
+        if (mounted) setModalState(() => _isJoining = false);
+        return;
+      }
+      final DocumentSnapshot groupDoc = query.docs.first;
+      final Map<String, dynamic> data = groupDoc.data() as Map<String, dynamic>;
+      String hostName = "Unknown";
+      try {
+        DocumentSnapshot hostDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(data['createdBy'])
+            .get();
+        if (hostDoc.exists) {
+          final hostData = hostDoc.data() as Map<String, dynamic>;
+          hostName = hostData['username'] ?? hostData['email'] ?? "Unknown";
+        }
+      } catch (e) {
+        debugPrint(e.toString());
+      }
+      if (!mounted) return;
+      final Map<String, dynamic> groupItem = {
+        'id': groupDoc.id,
+        'name': data['serviceName'] ?? 'Unknown',
+        'logo': data['logo'] ?? 'assets/images/netflix.png',
+        'host': hostName,
+        'createdBy': data['createdBy'] ?? '',
+        'price': data['price']?.toString() ?? '0',
+        'duration':
+            '${data['duration']?.toString() ?? '-'} ${data['durationUnit']?.toString() ?? ''}'
+                .trim(),
+        'availableSlots': data['availableSlots'] ?? 0,
+        'members': data['members'] ?? [],
+      };
+      navigator.pop();
+      _inviteCodeController.clear();
+      _showSubscriptionRequestModal(this.context, groupItem);
+    } catch (e) {
+      debugPrint(e.toString());
+    } finally {
+      if (mounted) setModalState(() => _isJoining = false);
+    }
+  }
+
+  Future<void> _sendJoinRequest(
+    BuildContext context,
+    Map<String, dynamic> item,
+    String serviceEmail,
+  ) async {
+    final navigator = Navigator.of(context);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final List<dynamic> members = item['members'] ?? [];
+    if (members.contains(user.uid)) return;
+    if ((item['availableSlots'] ?? 0) <= 0) return;
+    try {
+      final String currentUserName = _username.isNotEmpty
+          ? _username
+          : "Unknown";
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+      final DocumentReference groupRef = FirebaseFirestore.instance
+          .collection('groups')
+          .doc(item['id']);
+      batch.update(groupRef, {
+        'members': FieldValue.arrayUnion([user.uid]),
+        'memberStatus.${user.uid}': 'pending',
+        'memberNames.${user.uid}': currentUserName,
+        'memberEmails.${user.uid}': serviceEmail,
+      });
+      final DocumentReference notifRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc();
+      batch.set(notifRef, {
+        'type': 'incoming_request',
+        'category': 'incoming_request',
+        'toUserId': item['createdBy'],
+        'fromUserId': user.uid,
+        'fromUserName': currentUserName,
+        'service': item['name'],
+        'logo': item['logo'],
+        'groupId': item['id'],
+        'price': "${item['price']} THB",
+        'status': 'pending',
+        'timestamp': FieldValue.serverTimestamp(),
+        'message': "$currentUserName want to join your group",
+        'serviceEmail': serviceEmail,
+      });
+      await batch.commit();
+      navigator.pop();
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+  void _showSubscriptionRequestModal(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) {
+    final TextEditingController emailController = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -101,126 +261,128 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                const Text(
-                  "Add Subscription",
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(15.0),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade200),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "Enter Invite Code",
-                        style: TextStyle(fontWeight: FontWeight.w500),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              height: 50,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF5F5F5),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const TextField(
-                                decoration: InputDecoration(
-                                  hintText: "e.g. DRB-7394",
-                                  hintStyle: TextStyle(
-                                    color: Colors.grey,
-                                    fontSize: 14,
-                                  ),
-                                  border: InputBorder.none,
-                                  contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 15,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton(
-                            onPressed: () {},
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.black,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(25),
-                              ),
-                              minimumSize: const Size(80, 47),
-                            ),
-                            child: const Text(
-                              "Join",
-                              style: TextStyle(
-                                fontSize: 14.0,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
                 Row(
                   children: [
-                    Expanded(
-                      child: Divider(color: Colors.grey[400], thickness: 1),
+                    Container(
+                      width: 37.0,
+                      height: 37.0,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        image: DecorationImage(
+                          image: AssetImage(item['logo']),
+                          fit: BoxFit.cover,
+                        ),
+                        border: Border.all(
+                          color: const Color.fromARGB(255, 242, 242, 242),
+                          width: 1.0,
+                        ),
+                      ),
                     ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 10),
-                      child: Text("or", style: TextStyle(color: Colors.grey)),
-                    ),
+                    const SizedBox(width: 15),
                     Expanded(
-                      child: Divider(color: Colors.grey[400], thickness: 1),
+                      child: Text(
+                        item['name'],
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => HostProfilePage(
+                              hostUserId: item['createdBy'],
+                              hostUsername: item['host'],
+                            ),
+                          ),
+                        );
+                      },
+                      style: TextButton.styleFrom(
+                        alignment: Alignment.centerRight,
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        "See reviews",
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w400,
+                          decoration: TextDecoration.underline,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                _buildInfoRow("By", item['host']),
+                const Divider(height: 1),
+                _buildInfoRow("Price", "${item['price']} THB"),
+                const Divider(height: 1),
+                _buildInfoRow("Duration", item['duration']),
+                const SizedBox(height: 20),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Service Email",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F5F5),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: TextField(
+                        controller: emailController,
+                        decoration: const InputDecoration(
+                          hintText: "Email",
+                          hintStyle: TextStyle(
+                            color: Colors.grey,
+                            fontSize: 14,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 15,
+                            vertical: 15,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
-                  height: 47,
+                  height: 50,
                   child: ElevatedButton(
-                    onPressed: () async {
-                      Navigator.pop(context); // ปิด modal ก่อน
-
-                      final result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              const pages.CreateNewGroupPage(),
-                        ),
-                      );
-
-                      if (!context.mounted) return;
-
-                      if (result != null) {
-                        final newGroup = Map<String, dynamic>.from(result);
-                        newGroup['status'] = "";
-                        newGroup['members'] = [];
-                        newGroup['paymentInfo'] = {};
-
-                        setState(() {
-                          _subscriptions.add(newGroup);
-                        });
+                    onPressed: () {
+                      if (emailController.text.isNotEmpty) {
+                        final email = emailController.text.trim();
+                        Navigator.pop(context);
+                        _sendJoinRequest(this.context, item, email);
+                        _showSuccessModal(this.context);
                       }
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.black,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
+                        borderRadius: BorderRadius.circular(25),
                       ),
                     ),
                     child: const Text(
-                      "Create New Group",
+                      "Send Request",
                       style: TextStyle(
                         fontSize: 14.0,
                         fontWeight: FontWeight.w500,
@@ -237,7 +399,292 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Function to get the current page based on bottom nav index
+  void _showSuccessModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 30),
+              Container(
+                width: 55.0,
+                height: 55.0,
+                decoration: const BoxDecoration(
+                  color: Colors.black,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.check, color: Colors.white, size: 36),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "Success !",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "Your request has been sent,",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.black,
+                ),
+              ),
+              const Text(
+                "Please wait for the host to approve.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(25),
+                    ),
+                  ),
+                  child: const Text(
+                    "Done",
+                    style: TextStyle(
+                      fontSize: 14.0,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 15.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color.fromARGB(255, 92, 94, 98),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddSubscriptionModal(BuildContext context) {
+    _inviteCodeController.clear();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20.0,
+                  vertical: 10.0,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      "Add Subscription",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.all(15.0),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade200),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Enter Invite Code",
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Container(
+                                  height: 50,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF5F5F5),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: TextField(
+                                    controller: _inviteCodeController,
+                                    decoration: const InputDecoration(
+                                      hintText: "e.g. ABC-1234",
+                                      hintStyle: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 14,
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 15,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              ElevatedButton(
+                                onPressed: _isJoining
+                                    ? null
+                                    : () => _joinGroup(context, setModalState),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.black,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(25),
+                                  ),
+                                  minimumSize: const Size(50, 47),
+                                  padding: EdgeInsets.zero,
+                                ),
+                                child: _isJoining
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.search, size: 24),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Divider(color: Colors.grey[400], thickness: 1),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text(
+                            "or",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                        Expanded(
+                          child: Divider(color: Colors.grey[400], thickness: 1),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 47,
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  const pages.CreateNewGroupPage(),
+                            ),
+                          );
+                          if (result != null) {
+                            setState(() {
+                              if (currentUserId.isNotEmpty) {
+                                _groupsStream = _createQueryStream();
+                                _allGroupsStream = _createAllMemberStream();
+                              }
+                            });
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.black,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                        ),
+                        child: const Text(
+                          "Create New Group",
+                          style: TextStyle(
+                            fontSize: 14.0,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _getCurrentPage() {
     switch (_bottomNavIndex) {
       case 0:
@@ -262,39 +709,18 @@ class _HomePageState extends State<HomePage> {
               centerTitle: false,
               backgroundColor: Colors.white,
               elevation: 0,
-              title: const Text(
-                "Hi, Poon",
-                style: TextStyle(fontSize: 14.0, color: Colors.black),
+              title: Text(
+                "Hi, $_username",
+                style: const TextStyle(fontSize: 14.0, color: Colors.black),
                 textAlign: TextAlign.left,
               ),
-              actions: [
-                // เพิ่มปุ่มทดสอบตรงนี้
-                IconButton(
-                  icon: const Icon(Icons.settings, color: Colors.white),
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            const HostGroupDetailsPage(subscription: {}),
-                      ),
-                    );
-                  },
-                ),
-              ],
             )
           : null,
       body: _getCurrentPage(),
-
       floatingActionButton: Visibility(
         visible: _bottomNavIndex == 0,
-        maintainSize: false,
-        maintainAnimation: false,
-        maintainState: false,
         child: FloatingActionButton(
-          onPressed: () {
-            _showAddSubscriptionModal(context);
-          },
+          onPressed: () => _showAddSubscriptionModal(context),
           backgroundColor: Colors.black,
           shape: const CircleBorder(),
           elevation: 2,
@@ -322,13 +748,8 @@ class _HomePageState extends State<HomePage> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: List.generate(_navItems.length, (index) {
                 bool isSelected = _bottomNavIndex == index;
-
                 return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _bottomNavIndex = index;
-                    });
-                  },
+                  onTap: () => setState(() => _bottomNavIndex = index),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     curve: Curves.easeInOut,
@@ -388,45 +809,175 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHomePage() {
-    return ListView(
-      padding: const EdgeInsets.only(left: 15.0, right: 15.0, bottom: 100),
-      children: [
-        _buildTotalDueCard(),
-        const SizedBox(height: 30.0),
-        const Text(
-          "Your Subscription",
-          style: TextStyle(fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 20.0),
-        _buildFilterBar(),
-        const SizedBox(height: 15.0),
-        ..._subscriptions.map((sub) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 15.0),
-            child: GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => GroupDetailsPage(subscription: sub),
-                  ),
+    if (currentUserId.isEmpty || _allGroupsStream == null) {
+      return ListView(
+        padding: const EdgeInsets.only(left: 15.0, right: 15.0, bottom: 100),
+        children: [
+          _buildTotalDueCard(0.0),
+          const SizedBox(height: 30.0),
+          const Text(
+            "Your Subscription",
+            style: TextStyle(fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 20.0),
+          _buildFilterBar(),
+          const SizedBox(height: 15.0),
+          const Center(child: Text("Please login to view subscriptions")),
+        ],
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: _allGroupsStream,
+      builder: (context, allSnapshot) {
+        double totalDue = 0.0;
+        if (allSnapshot.hasData && allSnapshot.data != null) {
+          for (var doc in allSnapshot.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final memberStatus =
+                data['memberStatus'] as Map<String, dynamic>? ?? {};
+            String statusToShow;
+            if (data['createdBy'] == currentUserId) {
+              statusToShow = 'paid';
+            } else {
+              statusToShow =
+                  memberStatus[currentUserId] ?? (data['status'] ?? 'unpaid');
+            }
+            if (statusToShow.toLowerCase() == 'unpaid') {
+              final price = data['price'];
+              if (price != null)
+                totalDue += double.tryParse(price.toString()) ?? 0.0;
+            }
+          }
+        }
+
+        return ListView(
+          padding: const EdgeInsets.only(left: 15.0, right: 15.0, bottom: 100),
+          children: [
+            _buildTotalDueCard(totalDue),
+            const SizedBox(height: 30.0),
+            const Text(
+              "Your Subscription",
+              style: TextStyle(fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 20.0),
+            _buildFilterBar(),
+            const SizedBox(height: 15.0),
+            StreamBuilder<QuerySnapshot>(
+              stream: _groupsStream,
+              builder: (context, snapshot) {
+                if (snapshot.hasError)
+                  return Center(child: Text("Error: ${snapshot.error}"));
+                if (snapshot.connectionState == ConnectionState.waiting)
+                  return const Center(child: CircularProgressIndicator());
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(20.0),
+                      child: Text("No subscriptions found"),
+                    ),
+                  );
+                }
+
+                var docs = snapshot.data!.docs;
+                if (_filterIndex == 2) {
+                  docs = docs.where((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    return data['createdBy'] != currentUserId;
+                  }).toList();
+                }
+
+                return Column(
+                  children: docs.map((DocumentSnapshot document) {
+                    Map<String, dynamic> sub =
+                        document.data()! as Map<String, dynamic>;
+                    sub['id'] = document.id;
+
+                    String statusToShow = "Unpaid";
+                    if (sub['createdBy'] == currentUserId) {
+                      statusToShow = "Paid";
+                    } else {
+                      Map<String, dynamic> memberStatus =
+                          sub['memberStatus'] ?? {};
+                      statusToShow =
+                          memberStatus[currentUserId] ??
+                          (sub['status'] ?? "Unpaid");
+                    }
+
+                    String timerText = "";
+                    String displayDate = "-";
+
+                    if (statusToShow.toLowerCase() != 'pending') {
+                      if (sub['endDate'] != null) {
+                        DateTime date = (sub['endDate'] as Timestamp).toDate();
+                        List<String> months = [
+                          "Jan",
+                          "Feb",
+                          "Mar",
+                          "Apr",
+                          "May",
+                          "Jun",
+                          "Jul",
+                          "Aug",
+                          "Sep",
+                          "Oct",
+                          "Nov",
+                          "Dec",
+                        ];
+                        displayDate = "${date.day} ${months[date.month - 1]}.";
+                      }
+                    }
+
+                    if (statusToShow.toLowerCase() == 'unpaid') {
+                      Map<String, dynamic> deadlines =
+                          sub['paymentDeadlines'] ?? {};
+                      Timestamp? deadlineTs = deadlines[currentUserId];
+                      if (deadlineTs != null) {
+                        DateTime deadline = deadlineTs.toDate();
+                        Duration diff = deadline.difference(DateTime.now());
+                        timerText = diff.isNegative
+                            ? "Expired"
+                            : "Please pay within ${diff.inHours} h ${diff.inMinutes % 60} m";
+                      }
+                    }
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 15.0),
+                      child: GestureDetector(
+                        onTap: () {
+                          if (statusToShow.toLowerCase() == 'pending') return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  sub['createdBy'] == currentUserId
+                                  ? HostGroupDetailsPage(subscription: sub)
+                                  : GroupDetailsPage(subscription: sub),
+                            ),
+                          );
+                        },
+                        child: SubscriptionCard(
+                          name: sub['serviceName'] ?? "Unknown",
+                          price: sub['price'].toString(),
+                          logoPath: sub['logo'] ?? "assets/images/netflix.png",
+                          endDate: displayDate,
+                          status: statusToShow,
+                          timerText: timerText,
+                        ),
+                      ),
+                    );
+                  }).toList(),
                 );
               },
-              child: SubscriptionCard(
-                name: sub['name'],
-                price: sub['price'],
-                logoPath: sub['logo'],
-                endDate: sub['endDate'],
-                status: sub['status'],
-              ),
             ),
-          );
-        }),
-      ],
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildTotalDueCard() {
+  Widget _buildTotalDueCard(double totalDue) {
+    String formattedAmount = totalDue.toStringAsFixed(2);
     return Container(
       height: 110.0,
       decoration: BoxDecoration(
@@ -444,16 +995,16 @@ class _HomePageState extends State<HomePage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
-                children: const [
+                children: [
                   Text(
-                    "0.00",
-                    style: TextStyle(
+                    formattedAmount,
+                    style: const TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 40.0,
                     ),
                   ),
-                  SizedBox(width: 10),
-                  Text(
+                  const SizedBox(width: 10),
+                  const Text(
                     "THB",
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
@@ -483,11 +1034,7 @@ class _HomePageState extends State<HomePage> {
           bool isSelected = _filterIndex == index;
           return Expanded(
             child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _filterIndex = index;
-                });
-              },
+              onTap: () => _onFilterChanged(index),
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 2.5),
                 decoration: BoxDecoration(
@@ -522,6 +1069,7 @@ class SubscriptionCard extends StatelessWidget {
   final String logoPath;
   final String endDate;
   final String status;
+  final String timerText;
 
   const SubscriptionCard({
     super.key,
@@ -530,25 +1078,28 @@ class SubscriptionCard extends StatelessWidget {
     required this.logoPath,
     required this.endDate,
     required this.status,
+    this.timerText = "",
   });
 
   @override
   Widget build(BuildContext context) {
     Color statusBgColor;
     Color statusTextColor;
-    bool hasStatus = status.isNotEmpty;
-    String statusText = "• $status";
+    String statusText = "• ${status[0].toUpperCase()}${status.substring(1)}";
 
-    switch (status) {
-      case "Paid":
+    switch (status.toLowerCase()) {
+      case "paid":
         statusBgColor = const Color.fromARGB(52, 65, 163, 19);
         statusTextColor = const Color.fromARGB(255, 65, 163, 19);
         break;
-      case "Pending":
-        statusBgColor = const Color.fromARGB(54, 255, 183, 0);
-        statusTextColor = const Color.fromARGB(255, 255, 183, 0);
+      case "pending":
+        statusBgColor = const Color(0xFFFFF9DB);
+        statusTextColor = const Color(0xFFEAB308);
         break;
-      case "Unpaid":
+      case "checking":
+        statusBgColor = const Color(0xFFDBEEFF);
+        statusTextColor = const Color(0xFF1A7FD4);
+        break;
       default:
         statusBgColor = const Color.fromARGB(255, 255, 214, 214);
         statusTextColor = const Color.fromARGB(255, 177, 6, 15);
@@ -564,10 +1115,7 @@ class SubscriptionCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
-            border: Border.all(
-              color: const Color.fromARGB(255, 242, 242, 242),
-              width: 1.0,
-            ),
+            border: Border.all(color: const Color(0xFFF2F2F2), width: 1.0),
             image: DecorationImage(image: AssetImage(logoPath)),
           ),
         ),
@@ -594,7 +1142,9 @@ class SubscriptionCard extends StatelessWidget {
                   ),
                 ],
               ),
-              status == "Unpaid" ? const Spacer() : const SizedBox(height: 8),
+              (status.toLowerCase() == "unpaid")
+                  ? const Spacer()
+                  : const SizedBox(height: 8),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -603,24 +1153,20 @@ class SubscriptionCard extends StatelessWidget {
                     style: const TextStyle(fontSize: 12.0),
                   ),
                   const Spacer(),
-                  if (hasStatus)
-                    Container(
-                      decoration: BoxDecoration(
-                        color: statusBgColor,
-                        borderRadius: BorderRadius.circular(20.0),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10.0,
-                        vertical: 2.0,
-                      ),
-                      child: Text(
-                        statusText,
-                        style: TextStyle(
-                          fontSize: 12.0,
-                          color: statusTextColor,
-                        ),
-                      ),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: statusBgColor,
+                      borderRadius: BorderRadius.circular(20.0),
                     ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10.0,
+                      vertical: 2.0,
+                    ),
+                    child: Text(
+                      statusText,
+                      style: TextStyle(fontSize: 12.0, color: statusTextColor),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -629,15 +1175,11 @@ class SubscriptionCard extends StatelessWidget {
       ],
     );
 
-    if (status == "Unpaid") {
+    if (status.toLowerCase() == "unpaid" && timerText.isNotEmpty) {
       return Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          color: const Color.fromARGB(255, 237, 237, 237),
-          border: Border.all(
-            color: const Color.fromARGB(255, 237, 237, 237),
-            width: 1.0,
-          ),
+          color: const Color(0xFFEDEDED),
           borderRadius: BorderRadius.circular(12.0),
         ),
         child: Column(
@@ -646,6 +1188,7 @@ class SubscriptionCard extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12.0),
+                border: Border.all(color: const Color(0xFFE3E3E3), width: 1.0),
               ),
               padding: const EdgeInsets.all(15.0),
               child: IntrinsicHeight(child: mainCardContent),
@@ -659,13 +1202,13 @@ class SubscriptionCard extends StatelessWidget {
                     const Icon(
                       Icons.access_time_filled_rounded,
                       size: 16.0,
-                      color: Color.fromARGB(255, 92, 94, 98),
+                      color: Color(0xFF5C5E62),
                     ),
                     const SizedBox(width: 6.0),
-                    const Text(
-                      "Please pay within 12 h 05 m",
-                      style: TextStyle(
-                        color: Color.fromARGB(255, 92, 94, 98),
+                    Text(
+                      timerText,
+                      style: const TextStyle(
+                        color: Color(0xFF5C5E62),
                         fontSize: 12.0,
                       ),
                     ),
@@ -693,10 +1236,7 @@ class SubscriptionCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12.0),
-          border: Border.all(
-            color: const Color.fromARGB(255, 227, 227, 227),
-            width: 1.0,
-          ),
+          border: Border.all(color: const Color(0xFFE3E3E3), width: 1.0),
         ),
         child: mainCardContent,
       );
