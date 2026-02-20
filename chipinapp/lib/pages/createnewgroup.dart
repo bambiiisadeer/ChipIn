@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:math'; // 1. เพิ่ม import นี้เพื่อใช้สุ่มเลข
+import 'dart:math';
 
 class CreateNewGroupPage extends StatefulWidget {
   const CreateNewGroupPage({super.key});
@@ -39,21 +39,15 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
     {"name": "True Money Wallet", "image": "assets/images/truemoney.png"},
   ];
 
-  // 2. ฟังก์ชันสร้าง Invite Code (สุ่มตัวอักษร 3 ตัว + ตัวเลข 4 ตัว)
   String _generateInviteCode() {
     final random = Random();
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-
-    // สุ่มตัวอักษร 3 ตัว
     String letters = List.generate(
       3,
       (index) => chars[random.nextInt(chars.length)],
     ).join();
-
-    // สุ่มตัวเลข 4 ตัว
     String numbers = List.generate(4, (index) => random.nextInt(10)).join();
-
-    return '$letters-$numbers'; // ผลลัพธ์เช่น ABC-1234
+    return '$letters-$numbers';
   }
 
   @override
@@ -165,7 +159,24 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                             try {
                               final user = FirebaseAuth.instance.currentUser;
 
-                              // 1. คำนวณวันหมดอายุ
+                              // ดึง username จาก Firestore แทน displayName
+                              String creatorName = 'Host';
+                              if (user != null) {
+                                final userDoc = await FirebaseFirestore.instance
+                                    .collection('users')
+                                    .doc(user.uid)
+                                    .get();
+                                if (userDoc.exists) {
+                                  final userData =
+                                      userDoc.data() as Map<String, dynamic>;
+                                  creatorName =
+                                      userData['username'] ??
+                                      userData['email'] ??
+                                      'Host';
+                                }
+                              }
+
+                              // คำนวณวันหมดอายุ
                               DateTime endDate = DateTime.now();
                               int duration =
                                   int.tryParse(_durationController.text) ?? 1;
@@ -185,7 +196,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                                 );
                               }
 
-                              // 2. คำนวณราคา
+                              // คำนวณราคา
                               double totalPrice =
                                   double.tryParse(_priceController.text) ?? 0.0;
                               int membersCount = _slotsOpen > 0
@@ -196,10 +207,10 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                                 pricePerPerson.toStringAsFixed(2),
                               );
 
-                              // 3. สร้าง Invite Code ครั้งเดียวตรงนี้
+                              // สร้าง Invite Code
                               String newInviteCode = _generateInviteCode();
 
-                              // 4. บันทึกข้อมูลลง Firestore
+                              // บันทึกข้อมูลลง Firestore
                               await FirebaseFirestore.instance
                                   .collection('groups')
                                   .add({
@@ -214,14 +225,15 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                                     'maxSlots': _slotsOpen,
                                     'availableSlots': _slotsOpen,
                                     'createdBy': user?.uid,
-                                    'creatorName': user?.displayName,
+                                    'creatorName': creatorName,
+                                    'memberNames': {
+                                      if (user != null) user.uid: creatorName,
+                                    },
                                     'members': [user?.uid],
                                     'createdAt': FieldValue.serverTimestamp(),
                                     'endDate': endDate,
                                     'status': 'unpaid',
                                     'logo': selectedServiceData!['image'],
-
-                                    // เพิ่มฟิลด์ inviteCode ลง Database
                                     'inviteCode': newInviteCode,
                                   });
 
@@ -270,7 +282,6 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
     );
   }
 
-  // ... (Widget อื่นๆ เหมือนเดิม ไม่ต้องแก้)
   Widget _buildServiceDropdown(Map<String, String>? selectedServiceData) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -294,11 +305,8 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOutCubic,
             ),
-            onSelected: (String value) {
-              setState(() {
-                _selectedService = value;
-              });
-            },
+            onSelected: (String value) =>
+                setState(() => _selectedService = value),
             itemBuilder: (BuildContext context) {
               return _serviceOptions.map((item) {
                 return PopupMenuItem<String>(
@@ -473,11 +481,8 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOutCubic,
             ),
-            onSelected: (String value) {
-              setState(() {
-                _selectedDurationUnit = value;
-              });
-            },
+            onSelected: (String value) =>
+                setState(() => _selectedDurationUnit = value),
             itemBuilder: (BuildContext context) {
               return _durationUnits.map((unit) {
                 return PopupMenuItem<String>(
@@ -565,11 +570,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOutCubic,
             ),
-            onSelected: (String value) {
-              setState(() {
-                _selectedBank = value;
-              });
-            },
+            onSelected: (String value) => setState(() => _selectedBank = value),
             itemBuilder: (BuildContext context) {
               return _bankOptions.map((item) {
                 return PopupMenuItem<String>(

@@ -136,9 +136,35 @@ class _ProfilePageState extends State<ProfilePage> {
       if (newName.isNotEmpty && newName != _user?.username) {
         try {
           String uid = FirebaseAuth.instance.currentUser!.uid;
+
+          // อัพเดท username ใน users collection
           await FirebaseFirestore.instance.collection('users').doc(uid).update({
             'username': newName,
           });
+
+          // อัพเดท creatorName ใน groups ที่ user เป็น host
+          final hostGroupsQuery = await FirebaseFirestore.instance
+              .collection('groups')
+              .where('createdBy', isEqualTo: uid)
+              .get();
+
+          for (final doc in hostGroupsQuery.docs) {
+            await doc.reference.update({'creatorName': newName});
+          }
+
+          // อัพเดท memberNames.{uid} ใน groups ที่ user เป็น member
+          final memberGroupsQuery = await FirebaseFirestore.instance
+              .collection('groups')
+              .where('members', arrayContains: uid)
+              .get();
+
+          for (final doc in memberGroupsQuery.docs) {
+            final data = doc.data();
+            // ข้ามกลุ่มที่ user เป็น host (จัดการใน creatorName แล้ว)
+            if (data['createdBy'] == uid) continue;
+
+            await doc.reference.update({'memberNames.$uid': newName});
+          }
 
           setState(() {
             _user = UserModel(
@@ -274,14 +300,11 @@ class _ProfilePageState extends State<ProfilePage> {
       return Row(
         children: List.generate(5, (index) {
           if (avg >= index + 1) {
-            // ดาวเต็ม
             return const Padding(
               padding: EdgeInsets.symmetric(horizontal: 2.0),
               child: Icon(Icons.star, size: 24, color: Color(0xFFFFC107)),
             );
           } else if (avg > index && avg < index + 1) {
-            // ครึ่งดาว — ShaderMask คลิปครึ่งซ้ายสีเหลือง ครึ่งขวา transparent
-            // เห็นดาวเทาข้างล่างแทน ไม่มีขอบเกิน
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2.0),
               child: Stack(
@@ -304,7 +327,6 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             );
           } else {
-            // ดาวว่าง
             return const Padding(
               padding: EdgeInsets.symmetric(horizontal: 2.0),
               child: Icon(Icons.star, size: 24, color: Color(0xFFD9D9D9)),

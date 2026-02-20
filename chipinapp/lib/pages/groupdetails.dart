@@ -109,13 +109,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
-              "Payment submitted, waiting for host to verify",
+              "Payment submitted, waiting for host to verify.",
               style: TextStyle(
                 color: Colors.white, // สีตัวหนังสือ (เช่น สีขาว)
                 // ความหนาตัวหนังสือ
               ),
             ),
-            backgroundColor: Colors.black, // สีพื้นหลัง (เช่น สีเขียว)
+            backgroundColor: const Color.fromARGB(255, 30, 30, 30),
             duration: const Duration(seconds: 2),
           ),
         );
@@ -421,36 +421,37 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                             )
                           : Center(
                               child: Stack(
-  children: [
-    ClipRRect(
-      borderRadius: BorderRadius.circular(8.0),
-      child: Image.file(
-        _slipImage!,
-        width: double.infinity,
-        fit: BoxFit.fitWidth,
-      ),
-    ),
-    Positioned(
-      top: 5,
-      right: 5,
-      child: InkWell(
-        onTap: _removeImage,
-        child: Container(
-          padding: const EdgeInsets.all(4.0),
-          decoration: const BoxDecoration(
-            color: Colors.black54,
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(
-            Icons.close,
-            color: Colors.white,
-            size: 16,
-          ),
-        ),
-      ),
-    ),
-  ],
-),),
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8.0),
+                                    child: Image.file(
+                                      _slipImage!,
+                                      width: double.infinity,
+                                      fit: BoxFit.fitWidth,
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 5,
+                                    right: 5,
+                                    child: InkWell(
+                                      onTap: _removeImage,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(4.0),
+                                        decoration: const BoxDecoration(
+                                          color: Colors.black54,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.close,
+                                          color: Colors.white,
+                                          size: 16,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                       const SizedBox(height: 40.0),
                       SizedBox(
                         height: 47.0,

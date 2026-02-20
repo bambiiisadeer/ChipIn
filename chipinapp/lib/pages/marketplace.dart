@@ -430,6 +430,10 @@ class _MarketplacePageState extends State<MarketplacePage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: TextField(
+                        style: const TextStyle(
+                          fontSize:
+                              14,
+                        ),
                         controller: emailController,
                         decoration: const InputDecoration(
                           hintText: "Email",

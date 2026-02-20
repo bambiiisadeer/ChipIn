@@ -22,7 +22,6 @@ class _HomePageState extends State<HomePage> {
   int _bottomNavIndex = 0;
 
   Stream<QuerySnapshot>? _groupsStream;
-  Stream<QuerySnapshot>? _allGroupsStream;
   String currentUserId = "";
   String _username = "";
 
@@ -50,7 +49,6 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           currentUserId = user.uid;
           _groupsStream = _createQueryStream();
-          _allGroupsStream = _createAllMemberStream();
         });
         _usernameSubscription?.cancel();
         _listenToUsername();
@@ -60,7 +58,6 @@ class _HomePageState extends State<HomePage> {
           currentUserId = "";
           _username = "";
           _groupsStream = null;
-          _allGroupsStream = null;
         });
       }
     });
@@ -90,33 +87,21 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
+  // Single stream — fetches all groups where user is a member.
+  // Filter by Host/Member is done in-memory to prevent stream recreation (no flicker).
   Stream<QuerySnapshot> _createQueryStream() {
-    Query query = FirebaseFirestore.instance.collection('groups');
-    if (currentUserId.isEmpty) return const Stream.empty();
-    if (_filterIndex == 0) {
-      query = query.where('members', arrayContains: currentUserId);
-    } else if (_filterIndex == 1) {
-      query = query.where('createdBy', isEqualTo: currentUserId);
-    } else if (_filterIndex == 2) {
-      query = query.where('members', arrayContains: currentUserId);
-    }
-    return query.orderBy('createdAt', descending: true).snapshots();
-  }
-
-  Stream<QuerySnapshot> _createAllMemberStream() {
     if (currentUserId.isEmpty) return const Stream.empty();
     return FirebaseFirestore.instance
         .collection('groups')
         .where('members', arrayContains: currentUserId)
+        .orderBy('createdAt', descending: true)
         .snapshots();
   }
 
   void _onFilterChanged(int index) {
     setState(() {
       _filterIndex = index;
-      if (currentUserId.isNotEmpty) {
-        _groupsStream = _createQueryStream();
-      }
+      // No stream recreation — filter applied in-memory inside StreamBuilder
     });
   }
 
@@ -344,6 +329,7 @@ class _HomePageState extends State<HomePage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: TextField(
+                        style: const TextStyle(fontSize: 14),
                         controller: emailController,
                         decoration: const InputDecoration(
                           hintText: "Email",
@@ -653,7 +639,6 @@ class _HomePageState extends State<HomePage> {
                             setState(() {
                               if (currentUserId.isNotEmpty) {
                                 _groupsStream = _createQueryStream();
-                                _allGroupsStream = _createAllMemberStream();
                               }
                             });
                           }
@@ -809,7 +794,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHomePage() {
-    if (currentUserId.isEmpty || _allGroupsStream == null) {
+    if (currentUserId.isEmpty || _groupsStream == null) {
       return ListView(
         padding: const EdgeInsets.only(left: 15.0, right: 15.0, bottom: 100),
         children: [
@@ -827,28 +812,57 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // Single StreamBuilder — stream is never recreated when filter changes
     return StreamBuilder<QuerySnapshot>(
-      stream: _allGroupsStream,
-      builder: (context, allSnapshot) {
+      stream: _groupsStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text("Error: ${snapshot.error}"));
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final allDocs = snapshot.data?.docs ?? [];
+
+        // Calculate total due from ALL groups (unfiltered)
         double totalDue = 0.0;
-        if (allSnapshot.hasData && allSnapshot.data != null) {
-          for (var doc in allSnapshot.data!.docs) {
-            final data = doc.data() as Map<String, dynamic>;
-            final memberStatus =
-                data['memberStatus'] as Map<String, dynamic>? ?? {};
-            String statusToShow;
-            if (data['createdBy'] == currentUserId) {
-              statusToShow = 'paid';
-            } else {
-              statusToShow =
-                  memberStatus[currentUserId] ?? (data['status'] ?? 'unpaid');
-            }
-            if (statusToShow.toLowerCase() == 'unpaid') {
-              final price = data['price'];
-              if (price != null)
-                totalDue += double.tryParse(price.toString()) ?? 0.0;
+        for (var doc in allDocs) {
+          final data = doc.data() as Map<String, dynamic>;
+          final memberStatus =
+              data['memberStatus'] as Map<String, dynamic>? ?? {};
+          String statusToShow;
+          if (data['createdBy'] == currentUserId) {
+            statusToShow = 'paid';
+          } else {
+            statusToShow =
+                memberStatus[currentUserId] ?? (data['status'] ?? 'unpaid');
+          }
+          if (statusToShow.toLowerCase() == 'unpaid') {
+            final price = data['price'];
+            if (price != null) {
+              totalDue += double.tryParse(price.toString()) ?? 0.0;
             }
           }
+        }
+
+        // In-memory filter — no stream recreation, no flicker
+        List<DocumentSnapshot> filteredDocs;
+        if (_filterIndex == 1) {
+          // Host only
+          filteredDocs = allDocs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['createdBy'] == currentUserId;
+          }).toList();
+        } else if (_filterIndex == 2) {
+          // Member only (not host)
+          filteredDocs = allDocs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['createdBy'] != currentUserId;
+          }).toList();
+        } else {
+          // All
+          filteredDocs = allDocs;
         }
 
         return ListView(
@@ -863,113 +877,92 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 20.0),
             _buildFilterBar(),
             const SizedBox(height: 15.0),
-            StreamBuilder<QuerySnapshot>(
-              stream: _groupsStream,
-              builder: (context, snapshot) {
-                if (snapshot.hasError)
-                  return Center(child: Text("Error: ${snapshot.error}"));
-                if (snapshot.connectionState == ConnectionState.waiting)
-                  return const Center(child: CircularProgressIndicator());
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Text("No subscriptions found"),
-                    ),
-                  );
+            if (filteredDocs.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20.0),
+                  child: Text("No subscriptions found"),
+                ),
+              )
+            else
+              ...filteredDocs.map((DocumentSnapshot document) {
+                Map<String, dynamic> sub =
+                    document.data()! as Map<String, dynamic>;
+                sub['id'] = document.id;
+
+                String statusToShow = "Unpaid";
+                if (sub['createdBy'] == currentUserId) {
+                  statusToShow = "Paid";
+                } else {
+                  Map<String, dynamic> memberStatus = sub['memberStatus'] ?? {};
+                  statusToShow =
+                      memberStatus[currentUserId] ??
+                      (sub['status'] ?? "Unpaid");
                 }
 
-                var docs = snapshot.data!.docs;
-                if (_filterIndex == 2) {
-                  docs = docs.where((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    return data['createdBy'] != currentUserId;
-                  }).toList();
+                String timerText = "";
+                String displayDate = "-";
+
+                if (statusToShow.toLowerCase() != 'pending') {
+                  if (sub['endDate'] != null) {
+                    DateTime date = (sub['endDate'] as Timestamp).toDate();
+                    List<String> months = [
+                      "Jan",
+                      "Feb",
+                      "Mar",
+                      "Apr",
+                      "May",
+                      "Jun",
+                      "Jul",
+                      "Aug",
+                      "Sep",
+                      "Oct",
+                      "Nov",
+                      "Dec",
+                    ];
+                    displayDate = "${date.day} ${months[date.month - 1]}.";
+                  }
                 }
 
-                return Column(
-                  children: docs.map((DocumentSnapshot document) {
-                    Map<String, dynamic> sub =
-                        document.data()! as Map<String, dynamic>;
-                    sub['id'] = document.id;
+                if (statusToShow.toLowerCase() == 'unpaid') {
+                  Map<String, dynamic> deadlines =
+                      sub['paymentDeadlines'] ?? {};
+                  Timestamp? deadlineTs = deadlines[currentUserId];
+                  if (deadlineTs != null) {
+                    DateTime deadline = deadlineTs.toDate();
+                    Duration diff = deadline.difference(DateTime.now());
+                    timerText = diff.isNegative
+                        ? "Expired"
+                        : "Please pay within ${diff.inHours} h ${diff.inMinutes % 60} m";
+                  }
+                }
 
-                    String statusToShow = "Unpaid";
-                    if (sub['createdBy'] == currentUserId) {
-                      statusToShow = "Paid";
-                    } else {
-                      Map<String, dynamic> memberStatus =
-                          sub['memberStatus'] ?? {};
-                      statusToShow =
-                          memberStatus[currentUserId] ??
-                          (sub['status'] ?? "Unpaid");
-                    }
-
-                    String timerText = "";
-                    String displayDate = "-";
-
-                    if (statusToShow.toLowerCase() != 'pending') {
-                      if (sub['endDate'] != null) {
-                        DateTime date = (sub['endDate'] as Timestamp).toDate();
-                        List<String> months = [
-                          "Jan",
-                          "Feb",
-                          "Mar",
-                          "Apr",
-                          "May",
-                          "Jun",
-                          "Jul",
-                          "Aug",
-                          "Sep",
-                          "Oct",
-                          "Nov",
-                          "Dec",
-                        ];
-                        displayDate = "${date.day} ${months[date.month - 1]}.";
-                      }
-                    }
-
-                    if (statusToShow.toLowerCase() == 'unpaid') {
-                      Map<String, dynamic> deadlines =
-                          sub['paymentDeadlines'] ?? {};
-                      Timestamp? deadlineTs = deadlines[currentUserId];
-                      if (deadlineTs != null) {
-                        DateTime deadline = deadlineTs.toDate();
-                        Duration diff = deadline.difference(DateTime.now());
-                        timerText = diff.isNegative
-                            ? "Expired"
-                            : "Please pay within ${diff.inHours} h ${diff.inMinutes % 60} m";
-                      }
-                    }
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 15.0),
-                      child: GestureDetector(
-                        onTap: () {
-                          if (statusToShow.toLowerCase() == 'pending') return;
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  sub['createdBy'] == currentUserId
-                                  ? HostGroupDetailsPage(subscription: sub)
-                                  : GroupDetailsPage(subscription: sub),
-                            ),
-                          );
-                        },
-                        child: SubscriptionCard(
-                          name: sub['serviceName'] ?? "Unknown",
-                          price: sub['price'].toString(),
-                          logoPath: sub['logo'] ?? "assets/images/netflix.png",
-                          endDate: displayDate,
-                          status: statusToShow,
-                          timerText: timerText,
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 15.0),
+                  child: GestureDetector(
+                    onTap: () {
+                      if (statusToShow.toLowerCase() == 'pending') return;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              sub['createdBy'] == currentUserId
+                              ? HostGroupDetailsPage(subscription: sub)
+                              : GroupDetailsPage(subscription: sub),
                         ),
-                      ),
-                    );
-                  }).toList(),
+                      );
+                    },
+                    child: SubscriptionCard(
+                      name: sub['serviceName'] ?? "Unknown",
+                      price: sub['price'].toString(),
+                      logoPath: sub['logo'] ?? "assets/images/netflix.png",
+                      endDate: displayDate,
+                      status: statusToShow,
+                      timerText: timerText,
+                    ),
+                  ),
                 );
-              },
-            ),
+              }),
           ],
         );
       },

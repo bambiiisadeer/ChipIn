@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+
 class HostGroupDetailsPage extends StatefulWidget {
   final Map<String, dynamic> subscription;
 
@@ -219,7 +220,11 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
 
           String displayName = "Member";
           if (isHost) {
-            displayName = sub['creatorName'] ?? 'Host';
+            displayName =
+                (sub['creatorName'] != null &&
+                    sub['creatorName'].toString().isNotEmpty)
+                ? sub['creatorName']
+                : (memberNames[memberUid] ?? 'Host');
           } else if (memberNames.containsKey(memberUid)) {
             displayName = memberNames[memberUid];
           }

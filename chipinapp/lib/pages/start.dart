@@ -162,7 +162,7 @@ class _StartPageState extends State<StartPage>
                         duration: const Duration(milliseconds: 10),
                         child: _showStatic
                             ? Image.asset(
-                                "assets/logo/logowhitev2.png",
+                                "assets/logo/logowhite.png",
                                 height: 60.0,
                                 width: 60.0,
                                 key: const ValueKey('static'),
