@@ -1,57 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 
-class AddReviewPage extends StatefulWidget {
+class AddReviewPage extends ConsumerStatefulWidget {
   final Map<String, dynamic> subscription;
 
   const AddReviewPage({super.key, required this.subscription});
 
   @override
-  State<AddReviewPage> createState() => _AddReviewPageState();
+  ConsumerState<AddReviewPage> createState() => _AddReviewPageState();
 }
 
-class _AddReviewPageState extends State<AddReviewPage> {
+class _AddReviewPageState extends ConsumerState<AddReviewPage> {
   int _rating = 0;
   final TextEditingController _reviewController = TextEditingController();
 
-  String _currentUsername = '';
-  String _currentUserInitial = '';
-  bool _isLoadingUser = true;
   bool _isSubmitting = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadCurrentUser();
-  }
-
-  Future<void> _loadCurrentUser() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (doc.exists && mounted) {
-        final data = doc.data() as Map<String, dynamic>;
-        final username = data['username'] ?? user.email ?? 'Member';
-        setState(() {
-          _currentUsername = username;
-          _currentUserInitial = username.isNotEmpty
-              ? username[0].toUpperCase()
-              : 'M';
-          _isLoadingUser = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('[AddReview] Error loading user: $e');
-      if (mounted) setState(() => _isLoadingUser = false);
-    }
-  }
 
   Future<void> _submitReview() async {
     if (_rating == 0) {
@@ -67,11 +32,15 @@ class _AddReviewPageState extends State<AddReviewPage> {
     setState(() => _isSubmitting = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      // ✅ 1. ดึงข้อมูล User จาก Provider ได้เลย ไม่ต้อง Query ใหม่
+      final user = ref.read(authStateProvider).value;
       if (user == null) return;
 
-      final String hostUserId =
-          (widget.subscription['createdBy'] as String?) ?? '';
+      final userProfile = ref.read(userProfileProvider).value;
+      final String currentUsername = userProfile?.username ?? 'Member';
+      final String currentUserInitial = currentUsername.isNotEmpty ? currentUsername[0].toUpperCase() : 'M';
+
+      final String hostUserId = (widget.subscription['createdBy'] as String?) ?? '';
 
       debugPrint('[AddReview] hostUserId="$hostUserId"');
       debugPrint('[AddReview] groupId="${widget.subscription['id']}"');
@@ -96,8 +65,8 @@ class _AddReviewPageState extends State<AddReviewPage> {
       await reviewsCol.add({
         'hostUserId': hostUserId,
         'reviewerUserId': user.uid,
-        'reviewerUsername': _currentUsername,
-        'reviewerInitial': _currentUserInitial,
+        'reviewerUsername': currentUsername, // ✅ ใช้ชื่อปัจจุบัน
+        'reviewerInitial': currentUserInitial, // ✅ ใช้ Initial ปัจจุบัน
         'rating': _rating,
         'comment': _reviewController.text.trim(),
         'groupId': widget.subscription['id'] ?? '',
@@ -128,7 +97,6 @@ class _AddReviewPageState extends State<AddReviewPage> {
       debugPrint('[AddReview] average=$average count=$count');
 
       // ---- Step 4: Update average_rating in users doc ----
-      // Use set with merge to ensure field is created even if it doesn't exist
       await userDocRef.set({
         'average_rating': double.parse(average.toStringAsFixed(2)),
         'review_count': count,
@@ -165,6 +133,12 @@ class _AddReviewPageState extends State<AddReviewPage> {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ 2. อ่านข้อมูลเพื่อเอามาแสดงผลบนหน้าจอผ่าน Provider
+    final userProfileAsync = ref.watch(userProfileProvider);
+    final isLoadingUser = userProfileAsync.isLoading;
+    final String currentUsername = userProfileAsync.value?.username ?? 'Member';
+    final String currentUserInitial = currentUsername.isNotEmpty ? currentUsername[0].toUpperCase() : 'M';
+
     return Theme(
       data: Theme.of(context).copyWith(
         splashColor: Colors.transparent,
@@ -207,14 +181,16 @@ class _AddReviewPageState extends State<AddReviewPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 10.0),
-                _isLoadingUser
+                
+                // ✅ 3. ถ้ากำลังดึงข้อมูล Provider โชว์วงกลมโหลดก่อน ถ้าได้แล้วก็วาดโปรไฟล์เลย
+                isLoadingUser
                     ? const SizedBox(
                         height: 37,
                         child: Center(
                           child: SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
                           ),
                         ),
                       )
@@ -229,7 +205,7 @@ class _AddReviewPageState extends State<AddReviewPage> {
                             ),
                             alignment: Alignment.center,
                             child: Text(
-                              _currentUserInitial,
+                              currentUserInitial,
                               style: TextStyle(
                                 fontSize: 18.0,
                                 color: Colors.grey.shade600,
@@ -242,7 +218,7 @@ class _AddReviewPageState extends State<AddReviewPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _currentUsername,
+                                currentUsername,
                                 style: const TextStyle(
                                   fontSize: 15.0,
                                   fontWeight: FontWeight.w500,
@@ -312,7 +288,7 @@ class _AddReviewPageState extends State<AddReviewPage> {
                   height: 47.0,
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (_isSubmitting || _isLoadingUser)
+                    onPressed: (_isSubmitting || isLoadingUser)
                         ? null
                         : _submitReview,
                     style: ButtonStyle(

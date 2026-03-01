@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
-import '../pages/home.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
+import '../pages/home.dart'; // ✅ สำคัญ: ให้มองเห็น Provider ของหน้า Home
 import '../services/auth_service.dart';
 
-class SignupPage extends StatefulWidget {
+class SignupPage extends ConsumerStatefulWidget {
   const SignupPage({super.key});
 
   @override
-  State<SignupPage> createState() => _SignupPageState();
+  ConsumerState<SignupPage> createState() => _SignupPageState();
 }
 
-class _SignupPageState extends State<SignupPage> {
+class _SignupPageState extends ConsumerState<SignupPage> {
   bool _obscureText = true;
 
   // แยก loading state ของแต่ละปุ่ม
@@ -55,9 +56,15 @@ class _SignupPageState extends State<SignupPage> {
       setState(() => _isSignUpLoading = false);
 
       if (result == null) {
-        Navigator.pushReplacement(
+        // ✅ บังคับล้าง Cache ของ UI และ UserProfile เพื่อรีเซ็ตหน้าจอใหม่ทั้งหมด
+        ref.invalidate(bottomNavIndexProvider);
+        ref.invalidate(filterIndexProvider);
+        ref.invalidate(userProfileProvider);
+
+        Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
+          (route) => false, // ลบทุก route ออกจาก stack
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -76,9 +83,15 @@ class _SignupPageState extends State<SignupPage> {
       setState(() => _isGoogleLoading = false);
 
       if (result != null) {
-        Navigator.pushReplacement(
+        // ✅ ล้าง Cache ของ UI และ UserProfile เผื่อกรณีเป็น User ใหม่จาก Google
+        ref.invalidate(bottomNavIndexProvider);
+        ref.invalidate(filterIndexProvider);
+        ref.invalidate(userProfileProvider);
+
+        Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
+          (route) => false,
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -198,7 +211,6 @@ class _SignupPageState extends State<SignupPage> {
                 ),
               ),
               const SizedBox(height: 35.0),
-              // ปุ่ม Sign up — spinner เฉพาะปุ่มนี้เท่านั้น
               GestureDetector(
                 onTap: _isAnyLoading ? null : _handleSignUp,
                 child: Container(
@@ -225,20 +237,16 @@ class _SignupPageState extends State<SignupPage> {
                 ),
               ),
               const Spacer(),
-              Center(
+              const Center(
                 child: Text(
                   "Or  sign up with",
-                  style: TextStyle(
-                    color: const Color.fromARGB(255, 92, 94, 98),
-                  ),
+                  style: TextStyle(color: Color.fromARGB(255, 92, 94, 98)),
                 ),
               ),
               const SizedBox(height: 17.0),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                spacing: 30.0,
                 children: [
-                  // ปุ่ม Google — spinner เฉพาะปุ่มนี้เท่านั้น
                   GestureDetector(
                     onTap: _isAnyLoading ? null : _handleGoogleSignUp,
                     child: Container(
@@ -251,15 +259,17 @@ class _SignupPageState extends State<SignupPage> {
                       ),
                       child: _isGoogleLoading
                           ? const Padding(
-                              padding: EdgeInsets.all(10.0),
+                              padding: EdgeInsets.all(12.0),
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
                                 color: Colors.black,
                               ),
                             )
-                          : Image.asset(
-                              "assets/images/googlelogo.png",
-                              height: 24.0,
+                          : Center(
+                              child: Image.asset(
+                                "assets/images/googlelogo.png",
+                                height: 24.0,
+                              ),
                             ),
                     ),
                   ),
@@ -267,7 +277,6 @@ class _SignupPageState extends State<SignupPage> {
               ),
               const Spacer(),
               Row(
-                spacing: 10.0,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   GestureDetector(
@@ -280,6 +289,7 @@ class _SignupPageState extends State<SignupPage> {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 10.0),
                   const Text(
                     "into existing account",
                     style: TextStyle(color: Color.fromARGB(255, 92, 94, 98)),

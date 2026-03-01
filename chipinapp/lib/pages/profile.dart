@@ -1,117 +1,61 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/auth_service.dart';
 import '../models/user_model.dart';
 
-class ProfilePage extends StatefulWidget {
+// ==========================================
+// 🔴 LOCAL PROVIDER (สำหรับดึง Reviews)
+// ==========================================
+final userReviewsProvider =
+    StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
+      final user = ref.watch(authStateProvider).value;
+      if (user == null) return const Stream.empty();
+
+      return FirebaseFirestore.instance
+          .collection('reviews')
+          .where('hostUserId', isEqualTo: user.uid)
+          .snapshots()
+          .map((snapshot) {
+            final reviews = snapshot.docs.map((doc) => doc.data()).toList();
+
+            reviews.sort((a, b) {
+              final aTime = a['createdAt'] as Timestamp?;
+              final bTime = b['createdAt'] as Timestamp?;
+              if (aTime == null && bTime == null) return 0;
+              if (aTime == null) return 1;
+              if (bTime == null) return -1;
+              return bTime.compareTo(aTime);
+            });
+
+            return reviews;
+          });
+    });
+
+// ==========================================
+// 🔵 MAIN PAGE
+// ==========================================
+class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  ConsumerState<ProfilePage> createState() => _ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
+class _ProfilePageState extends ConsumerState<ProfilePage> {
   bool _isEditingUsername = false;
 
   final TextEditingController _usernameController = TextEditingController();
   final FocusNode _usernameFocusNode = FocusNode();
 
   final AuthService _authService = AuthService();
-  UserModel? _user;
-  bool _isFetching = true;
-
-  // Reviews
-  List<Map<String, dynamic>> _reviews = [];
-  double _averageRating = 0.0;
-  bool _isLoadingReviews = true;
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
     _usernameController.addListener(() {
       setState(() {});
     });
-  }
-
-  Future<void> _loadUserData() async {
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
-
-      String uid = currentUser.uid;
-      DocumentSnapshot doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-
-      if (doc.exists) {
-        final data = doc.data() as Map<String, dynamic>;
-
-        setState(() {
-          _usernameController.text = data['username'] ?? 'User';
-          _user = UserModel(
-            id: data['uid'] ?? uid,
-            username: data['username'] ?? 'User',
-            email: data['email'] ?? '',
-            authProvider: data['auth_provider'] ?? 'email',
-            averageRating: (data['average_rating'] ?? 0.0).toDouble(),
-            createdAt: data['created_at'] != null
-                ? (data['created_at'] as Timestamp).toDate()
-                : DateTime.now(),
-          );
-          _isFetching = false;
-        });
-
-        await _loadReviews(uid);
-      }
-    } catch (e) {
-      debugPrint("Error loading user data: $e");
-      if (mounted) {
-        setState(() {
-          _isFetching = false;
-          _isLoadingReviews = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _loadReviews(String hostUserId) async {
-    try {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('reviews')
-          .where('hostUserId', isEqualTo: hostUserId)
-          .get();
-
-      final reviews = querySnapshot.docs.map((doc) => doc.data()).toList();
-
-      reviews.sort((a, b) {
-        final aTime = a['createdAt'] as Timestamp?;
-        final bTime = b['createdAt'] as Timestamp?;
-        if (aTime == null && bTime == null) return 0;
-        if (aTime == null) return 1;
-        if (bTime == null) return -1;
-        return bTime.compareTo(aTime);
-      });
-
-      double total = 0;
-      for (var r in reviews) {
-        total += (r['rating'] as num).toDouble();
-      }
-      final avg = reviews.isEmpty ? 0.0 : total / reviews.length;
-
-      if (mounted) {
-        setState(() {
-          _reviews = reviews;
-          _averageRating = avg;
-          _isLoadingReviews = false;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error loading reviews: $e");
-      if (mounted) setState(() => _isLoadingReviews = false);
-    }
   }
 
   @override
@@ -121,9 +65,14 @@ class _ProfilePageState extends State<ProfilePage> {
     super.dispose();
   }
 
+  // ==========================================
+  // ฟังก์ชันสลับโหมดและบันทึกชื่อ (Global Update สุดยอดกวาดเรียบ!)
+  // ==========================================
   void _toggleEditMode() async {
+    final currentUser = ref.read(userProfileProvider).value;
+
     if (_isEditingUsername) {
-      if (_user == null) {
+      if (currentUser == null) {
         setState(() {
           _isEditingUsername = false;
           _usernameFocusNode.unfocus();
@@ -133,54 +82,116 @@ class _ProfilePageState extends State<ProfilePage> {
 
       String newName = _usernameController.text.trim();
 
-      if (newName.isNotEmpty && newName != _user?.username) {
+      if (newName.isNotEmpty && newName != currentUser.username) {
         try {
-          String uid = FirebaseAuth.instance.currentUser!.uid;
+          String uid = ref.read(authStateProvider).value!.uid;
 
-          // อัพเดท username ใน users collection
+          // 1. อัปเดตตาราง users
           await FirebaseFirestore.instance.collection('users').doc(uid).update({
             'username': newName,
           });
 
-          // อัพเดท creatorName ใน groups ที่ user เป็น host
+          // 2. อัปเดตตาราง groups (ในฐานะ Host)
           final hostGroupsQuery = await FirebaseFirestore.instance
               .collection('groups')
               .where('createdBy', isEqualTo: uid)
               .get();
-
           for (final doc in hostGroupsQuery.docs) {
             await doc.reference.update({'creatorName': newName});
           }
 
-          // อัพเดท memberNames.{uid} ใน groups ที่ user เป็น member
+          // 3. อัปเดตตาราง groups (ในฐานะ Member)
           final memberGroupsQuery = await FirebaseFirestore.instance
               .collection('groups')
               .where('members', arrayContains: uid)
               .get();
-
           for (final doc in memberGroupsQuery.docs) {
             final data = doc.data();
-            // ข้ามกลุ่มที่ user เป็น host (จัดการใน creatorName แล้ว)
             if (data['createdBy'] == uid) continue;
-
             await doc.reference.update({'memberNames.$uid': newName});
           }
 
-          setState(() {
-            _user = UserModel(
-              id: _user!.id,
-              username: newName,
-              email: _user!.email,
-              authProvider: _user!.authProvider,
-              averageRating: _user!.averageRating,
-              createdAt: _user!.createdAt,
-            );
-          });
+          // 4. อัปเดตตาราง reviews
+          final reviewsQuery = await FirebaseFirestore.instance
+              .collection('reviews')
+              .where('reviewerUserId', isEqualTo: uid)
+              .get();
+          for (final doc in reviewsQuery.docs) {
+            await doc.reference.update({
+              'reviewerUsername': newName,
+              'reviewerInitial': newName.isNotEmpty
+                  ? newName[0].toUpperCase()
+                  : 'U',
+            });
+          }
 
-          debugPrint("Username updated successfully!");
+          // ---------------------------------------------------------
+          // 5. 🔥 อัปเดตตาราง notifications (ในฐานะคนส่ง) แบบ Rebuild ประโยคใหม่ลง Database
+          // ---------------------------------------------------------
+          final notifSentQuery = await FirebaseFirestore.instance
+              .collection('notifications')
+              .where('fromUserId', isEqualTo: uid)
+              .get();
+
+          for (final doc in notifSentQuery.docs) {
+            final data = doc.data();
+            final String type = data['type'] ?? '';
+            final String category =
+                data['category'] ?? ''; // บางทีคุณใช้ category ในการแยก
+
+            // อัปเดต Field ชื่อทั้งหมดให้เป็นปัจจุบัน
+            Map<String, dynamic> updates = {'fromUserName': newName};
+            if (data.containsKey('sender')) {
+              updates['sender'] = newName;
+            }
+
+            // ==============================================
+            // 🔨 ประกอบประโยค message ใหม่ แล้วอัปเดตลง Database เลย!
+            // ==============================================
+
+            // Case 1: คนขอเข้าร่วมกลุ่ม (อาจจะมีหรือไม่มี email ต่อท้าย)
+            if (type == 'incoming_request' || category == 'incoming_request') {
+              String serviceEmail = data['serviceEmail'] ?? '';
+              if (serviceEmail.isNotEmpty) {
+                updates['message'] =
+                    "$newName want to join your group with email $serviceEmail";
+              } else {
+                updates['message'] = "$newName want to join your group";
+              }
+            }
+            // Case 2: คนส่งสลิปจ่ายเงิน
+            else if (type == 'payment_received' || category == 'check_slip') {
+              updates['message'] = "$newName sent payment";
+            }
+            // Case 3: โฮสต์กดอนุมัติ
+            else if (type == 'approved') {
+              String serviceEmail = data['serviceEmail'] ?? '';
+              if (serviceEmail.isNotEmpty) {
+                updates['message'] =
+                    "$newName has been approve your request with email $serviceEmail";
+              } else {
+                updates['message'] = "$newName has been approve your request";
+              }
+            }
+            // Case 4: โฮสต์กดปฏิเสธ
+            else if (type == 'rejected') {
+              updates['message'] = "$newName has been rejected your request";
+            }
+            else if (type == 'payment_approved') {
+              updates['message'] = "$newName has approved your payment";
+            } else if (type == 'payment_rejected') {
+              updates['message'] =
+                  "$newName has rejected your payment. Please submit again.";
+            }
+
+            // สั่งอัปเดตลง Database ทีเดียว!
+            await doc.reference.update(updates);
+          }
+
+          debugPrint("✅ Username updated globally successfully!");
         } catch (e) {
-          debugPrint("Failed to update username: $e");
-          _usernameController.text = _user?.username ?? "";
+          debugPrint("❌ Failed to update username globally: $e");
+          _usernameController.text = currentUser.username;
         }
       }
 
@@ -198,6 +209,9 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  // ==========================================
+  // UI Components
+  // ==========================================
   Widget _buildReviewItem(Map<String, dynamic> review) {
     final String initial = review['reviewerInitial'] ?? '?';
     final String username = review['reviewerUsername'] ?? 'Member';
@@ -294,7 +308,32 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final int reviewCount = _reviews.length;
+    final userProfileAsync = ref.watch(userProfileProvider);
+    final userReviewsAsync = ref.watch(userReviewsProvider);
+
+    final bool isFetching = userProfileAsync.isLoading;
+    final UserModel? user = userProfileAsync.value;
+    final bool isLoadingReviews = userReviewsAsync.isLoading;
+    final List<Map<String, dynamic>> reviews = userReviewsAsync.value ?? [];
+
+    if (user != null && !_isEditingUsername) {
+      if (_usernameController.text != user.username) {
+        _usernameController.value = TextEditingValue(
+          text: user.username,
+          selection: TextSelection.collapsed(offset: user.username.length),
+        );
+      }
+    }
+
+    final int reviewCount = reviews.length;
+    double averageRating = 0.0;
+    if (reviewCount > 0) {
+      double total = 0;
+      for (var r in reviews) {
+        total += (r['rating'] as num).toDouble();
+      }
+      averageRating = total / reviewCount;
+    }
 
     Widget buildStarRow(double avg) {
       return Row(
@@ -357,14 +396,13 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ],
       ),
-      body: _isFetching
+      body: isFetching
           ? const Center(child: CircularProgressIndicator())
           : Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20.0),
               child: Column(
                 children: [
                   const SizedBox(height: 20.0),
-                  // Profile Picture
                   Container(
                     width: 100,
                     height: 100,
@@ -376,7 +414,9 @@ class _ProfilePageState extends State<ProfilePage> {
                       child: Text(
                         _usernameController.text.isNotEmpty
                             ? _usernameController.text[0].toUpperCase()
-                            : "U",
+                            : (user?.email.isNotEmpty == true
+                                  ? user!.email[0].toUpperCase()
+                                  : "U"),
                         style: const TextStyle(
                           fontSize: 48,
                           fontWeight: FontWeight.w500,
@@ -386,7 +426,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Username with edit/save icon
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -429,20 +468,18 @@ class _ProfilePageState extends State<ProfilePage> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  // Email
                   Text(
-                    _user?.email ?? "Loading...",
+                    user?.email ?? "Loading...",
                     style: const TextStyle(fontSize: 14, color: Colors.black87),
                   ),
                   const SizedBox(height: 30),
-                  // Rating Section
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Row(
                         children: [
-                          buildStarRow(_averageRating),
+                          buildStarRow(averageRating),
                           const SizedBox(width: 10),
                           Text(
                             "($reviewCount)",
@@ -467,10 +504,10 @@ class _ProfilePageState extends State<ProfilePage> {
                                 children: [
                                   TextSpan(
                                     text:
-                                        _averageRating ==
-                                            _averageRating.truncateToDouble()
-                                        ? _averageRating.toInt().toString()
-                                        : _averageRating.toStringAsFixed(1),
+                                        averageRating ==
+                                            averageRating.truncateToDouble()
+                                        ? averageRating.toInt().toString()
+                                        : averageRating.toStringAsFixed(1),
                                     style: const TextStyle(
                                       fontSize: 20,
                                       fontWeight: FontWeight.w500,
@@ -491,9 +528,8 @@ class _ProfilePageState extends State<ProfilePage> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  // Reviews Section
                   Expanded(
-                    child: _isLoadingReviews
+                    child: isLoadingReviews
                         ? const Center(child: CircularProgressIndicator())
                         : reviewCount == 0
                         ? const SizedBox.shrink()
@@ -502,7 +538,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             separatorBuilder: (_, __) =>
                                 const SizedBox(height: 12),
                             itemBuilder: (context, index) {
-                              return _buildReviewItem(_reviews[index]);
+                              return _buildReviewItem(reviews[index]);
                             },
                           ),
                   ),

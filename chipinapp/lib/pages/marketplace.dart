@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 import 'hostprofile.dart';
 
-class MarketplacePage extends StatefulWidget {
+class MarketplacePage extends ConsumerStatefulWidget {
+  // ✅ เปลี่ยนเป็น ConsumerStatefulWidget
   const MarketplacePage({super.key});
 
   @override
-  State<MarketplacePage> createState() => _MarketplacePageState();
+  ConsumerState<MarketplacePage> createState() => _MarketplacePageState();
 }
 
-class _MarketplacePageState extends State<MarketplacePage> {
+class _MarketplacePageState extends ConsumerState<MarketplacePage> {
+  // ✅ เปลี่ยนเป็น ConsumerState
   int _selectedFilter = 0;
   String _selectedDuration = "All";
   String _selectedSort = "Rating";
@@ -136,7 +140,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
   }
 
   // ------------------------------------------------------------------ //
-  //  SEND JOIN REQUEST
+  //  SEND JOIN REQUEST (🔥 ใช้ Riverpod ดึงชื่อตัวเอง)
   // ------------------------------------------------------------------ //
 
   Future<void> _sendJoinRequest(
@@ -147,6 +151,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
     // capture ก่อน async gap
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
+    // ✅ 1. ดึง UID จาก Firebase Auth (หรือจะดึงจาก ref.read(authStateProvider) ก็ได้เหมือนกัน)
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -166,21 +171,9 @@ class _MarketplacePageState extends State<MarketplacePage> {
     }
 
     try {
-      // ดึง username ของ current user
-      String currentUserName = "Unknown";
-      try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
-        if (userDoc.exists) {
-          final userData = userDoc.data() as Map<String, dynamic>;
-          currentUserName =
-              userData['username'] ?? userData['email'] ?? "Unknown";
-        }
-      } catch (e) {
-        debugPrint(e.toString());
-      }
+      // ✅ 2. ดึง Username ปัจจุบันจาก Riverpod โคตรเร็ว ไม่ต้องเสียเวลา Query!
+      final userProfile = ref.read(userProfileProvider).value;
+      final String currentUserName = userProfile?.username ?? "Unknown";
 
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
@@ -202,13 +195,15 @@ class _MarketplacePageState extends State<MarketplacePage> {
         'category': 'incoming_request',
         'toUserId': item['createdBy'],
         'fromUserId': user.uid,
-        'fromUserName': currentUserName,
+        'fromUserName': currentUserName, // เก็บชื่อไว้
+        'sender': currentUserName, // สำหรับ fallback
         'service': item['name'],
         'logo': item['logo'],
         'groupId': item['id'],
         'price': "${item['price']} THB",
         'status': 'pending',
         'timestamp': FieldValue.serverTimestamp(),
+        // ทิ้งข้อความไว้เป็น Fallback เฉยๆ เพราะ NotificationPage เราประกอบร่างเองแล้ว
         'message': "$currentUserName want to join your group",
         'serviceEmail': serviceEmail,
       });
@@ -430,10 +425,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: TextField(
-                        style: const TextStyle(
-                          fontSize:
-                              14,
-                        ),
+                        style: const TextStyle(fontSize: 14),
                         controller: emailController,
                         decoration: const InputDecoration(
                           hintText: "Email",
@@ -879,10 +871,7 @@ class _MarketplacePageState extends State<MarketplacePage> {
 
     if (items.isEmpty) {
       return const Center(
-        child: Text(
-          "No listings available",
-          style: TextStyle(fontSize: 14.0, color: Colors.grey),
-        ),
+        child: Text("No listings available", style: TextStyle(fontSize: 14.0)),
       );
     }
 

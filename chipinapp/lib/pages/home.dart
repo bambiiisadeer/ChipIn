@@ -1,5 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/auth_service.dart';
+
 import 'createnewgroup.dart' as pages;
 import 'groupdetails.dart';
 import 'profile.dart';
@@ -7,27 +11,54 @@ import 'marketplace.dart';
 import 'hostgroupdetails.dart';
 import 'hostprofile.dart';
 import 'notification.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
-class HomePage extends StatefulWidget {
+// ==========================================
+// 🔴 LOCAL PROVIDERS (สำหรับ UI State)
+// ==========================================
+class FilterIndexNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+  void set(int value) => state = value;
+}
+
+final filterIndexProvider = NotifierProvider<FilterIndexNotifier, int>(
+  FilterIndexNotifier.new,
+);
+
+class BottomNavIndexNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+  void set(int value) => state = value;
+}
+
+final bottomNavIndexProvider = NotifierProvider<BottomNavIndexNotifier, int>(
+  BottomNavIndexNotifier.new,
+);
+
+final groupsStreamProvider = StreamProvider<QuerySnapshot>((ref) {
+  final authState = ref.watch(authStateProvider);
+  final user = authState.value;
+
+  if (user == null) return const Stream.empty();
+
+  return FirebaseFirestore.instance
+      .collection('groups')
+      .where('members', arrayContains: user.uid)
+      .orderBy('createdAt', descending: true)
+      .snapshots();
+});
+
+// ==========================================
+// 🔵 MAIN PAGE
+// ==========================================
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  int _filterIndex = 0;
-  int _bottomNavIndex = 0;
-
-  Stream<QuerySnapshot>? _groupsStream;
-  String currentUserId = "";
-  String _username = "";
-
-  StreamSubscription? _usernameSubscription;
-  StreamSubscription? _authSubscription;
-
+class _HomePageState extends ConsumerState<HomePage> {
   final TextEditingController _inviteCodeController = TextEditingController();
   bool _isJoining = false;
 
@@ -41,68 +72,13 @@ class _HomePageState extends State<HomePage> {
   ];
 
   @override
-  void initState() {
-    super.initState();
-    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
-      if (!mounted) return;
-      if (user != null) {
-        setState(() {
-          currentUserId = user.uid;
-          _groupsStream = _createQueryStream();
-        });
-        _usernameSubscription?.cancel();
-        _listenToUsername();
-      } else {
-        _usernameSubscription?.cancel();
-        setState(() {
-          currentUserId = "";
-          _username = "";
-          _groupsStream = null;
-        });
-      }
-    });
-  }
-
-  void _listenToUsername() {
-    if (currentUserId.isEmpty) return;
-    _usernameSubscription = FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUserId)
-        .snapshots()
-        .listen((doc) {
-          if (doc.exists && mounted) {
-            final data = doc.data() as Map<String, dynamic>;
-            setState(() {
-              _username = data['username'] ?? data['email'] ?? "";
-            });
-          }
-        });
-  }
-
-  @override
   void dispose() {
-    _usernameSubscription?.cancel();
-    _authSubscription?.cancel();
     _inviteCodeController.dispose();
     super.dispose();
   }
 
-  // Single stream — fetches all groups where user is a member.
-  // Filter by Host/Member is done in-memory to prevent stream recreation (no flicker).
-  Stream<QuerySnapshot> _createQueryStream() {
-    if (currentUserId.isEmpty) return const Stream.empty();
-    return FirebaseFirestore.instance
-        .collection('groups')
-        .where('members', arrayContains: currentUserId)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
-  }
-
   void _onFilterChanged(int index) {
-    setState(() {
-      _filterIndex = index;
-      // No stream recreation — filter applied in-memory inside StreamBuilder
-    });
+    ref.read(filterIndexProvider.notifier).set(index);
   }
 
   Future<void> _joinGroup(
@@ -111,34 +87,86 @@ class _HomePageState extends State<HomePage> {
   ) async {
     String code = _inviteCodeController.text.trim();
     if (code.isEmpty) return;
+
     setModalState(() => _isJoining = true);
-    final navigator = Navigator.of(context);
+
     try {
       final QuerySnapshot query = await FirebaseFirestore.instance
           .collection('groups')
           .where('inviteCode', isEqualTo: code)
           .limit(1)
           .get();
+
       if (query.docs.isEmpty) {
-        if (mounted) setModalState(() => _isJoining = false);
+        if (mounted) {
+          setModalState(() => _isJoining = false);
+          Navigator.pop(context);
+          ScaffoldMessenger.of(this.context).showSnackBar(
+            const SnackBar(
+              content: Text("Invalid invite code"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
         return;
       }
+
       final DocumentSnapshot groupDoc = query.docs.first;
       final Map<String, dynamic> data = groupDoc.data() as Map<String, dynamic>;
-      String hostName = "Unknown";
-      try {
-        DocumentSnapshot hostDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(data['createdBy'])
-            .get();
-        if (hostDoc.exists) {
-          final hostData = hostDoc.data() as Map<String, dynamic>;
-          hostName = hostData['username'] ?? hostData['email'] ?? "Unknown";
+
+      final currentUserId = ref.read(authStateProvider).value?.uid;
+      final List<dynamic> members = data['members'] ?? [];
+      final Map<String, dynamic> memberStatus = data['memberStatus'] ?? {};
+
+      if (currentUserId != null) {
+        if (members.contains(currentUserId) &&
+            memberStatus[currentUserId] != 'pending') {
+          if (mounted) {
+            setModalState(() => _isJoining = false);
+            Navigator.pop(context);
+            ScaffoldMessenger.of(this.context).showSnackBar(
+              const SnackBar(
+                content: Text("You are already a member of this group"),
+                backgroundColor: Colors.black,
+              ),
+            );
+          }
+          return;
         }
-      } catch (e) {
-        debugPrint(e.toString());
+
+        if (memberStatus[currentUserId] == 'pending') {
+          if (mounted) {
+            setModalState(() => _isJoining = false);
+            Navigator.pop(context);
+            ScaffoldMessenger.of(this.context).showSnackBar(
+              const SnackBar(
+                content: Text("You have already sent a request"),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          return;
+        }
       }
+
+      if ((data['availableSlots'] ?? 0) <= 0) {
+        if (mounted) {
+          setModalState(() => _isJoining = false);
+          Navigator.pop(context);
+          ScaffoldMessenger.of(this.context).showSnackBar(
+            const SnackBar(
+              content: Text("This group is full"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      String hostName = data['creatorName'] ?? "Unknown";
+
       if (!mounted) return;
+
       final Map<String, dynamic> groupItem = {
         'id': groupDoc.id,
         'name': data['serviceName'] ?? 'Unknown',
@@ -150,14 +178,17 @@ class _HomePageState extends State<HomePage> {
             '${data['duration']?.toString() ?? '-'} ${data['durationUnit']?.toString() ?? ''}'
                 .trim(),
         'availableSlots': data['availableSlots'] ?? 0,
-        'members': data['members'] ?? [],
+        'members': members,
       };
-      navigator.pop();
+
+      // ✅ จุดแก้ไข: คืนค่าเป็น false เสมอก่อนที่จะปิด Modal ความสำเร็จ
+      _isJoining = false; 
+      Navigator.pop(context); // ปิด Modal กรอก Invite Code
       _inviteCodeController.clear();
-      _showSubscriptionRequestModal(this.context, groupItem);
+      _showSubscriptionRequestModal(this.context, groupItem); // เด้ง Modal ยืนยันคำขอ
+
     } catch (e) {
       debugPrint(e.toString());
-    } finally {
       if (mounted) setModalState(() => _isJoining = false);
     }
   }
@@ -167,16 +198,18 @@ class _HomePageState extends State<HomePage> {
     Map<String, dynamic> item,
     String serviceEmail,
   ) async {
-    final navigator = Navigator.of(context);
-    final user = FirebaseAuth.instance.currentUser;
+    final authState = ref.read(authStateProvider);
+    final user = authState.value;
     if (user == null) return;
+
     final List<dynamic> members = item['members'] ?? [];
     if (members.contains(user.uid)) return;
     if ((item['availableSlots'] ?? 0) <= 0) return;
+
     try {
-      final String currentUserName = _username.isNotEmpty
-          ? _username
-          : "Unknown";
+      final userProfile = ref.read(userProfileProvider).value;
+      final String currentUserName = userProfile?.username ?? "Unknown";
+
       final WriteBatch batch = FirebaseFirestore.instance.batch();
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
@@ -206,7 +239,6 @@ class _HomePageState extends State<HomePage> {
         'serviceEmail': serviceEmail,
       });
       await batch.commit();
-      navigator.pop();
     } catch (e) {
       debugPrint(e.toString());
     }
@@ -495,6 +527,8 @@ class _HomePageState extends State<HomePage> {
 
   void _showAddSubscriptionModal(BuildContext context) {
     _inviteCodeController.clear();
+    _isJoining = false; // ✅ จุดแก้ไข: รีเซ็ตค่าเป็น false ทันทีที่กดเปิด Modal
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -628,20 +662,13 @@ class _HomePageState extends State<HomePage> {
                       child: ElevatedButton(
                         onPressed: () async {
                           Navigator.pop(context);
-                          final result = await Navigator.push(
+                          await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) =>
                                   const pages.CreateNewGroupPage(),
                             ),
                           );
-                          if (result != null) {
-                            setState(() {
-                              if (currentUserId.isNotEmpty) {
-                                _groupsStream = _createQueryStream();
-                              }
-                            });
-                          }
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.black,
@@ -670,8 +697,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _getCurrentPage() {
-    switch (_bottomNavIndex) {
+  Widget _getCurrentPage(int bottomNavIndex) {
+    switch (bottomNavIndex) {
       case 0:
         return _buildHomePage();
       case 1:
@@ -687,23 +714,28 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomNavIndex = ref.watch(bottomNavIndexProvider);
+    final userProfileAsync = ref.watch(userProfileProvider);
+
+    final username = userProfileAsync.value?.username ?? "";
+
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: _bottomNavIndex == 0
+      appBar: bottomNavIndex == 0
           ? AppBar(
               centerTitle: false,
               backgroundColor: Colors.white,
               elevation: 0,
               title: Text(
-                "Hi, $_username",
+                "Hi, $username",
                 style: const TextStyle(fontSize: 14.0, color: Colors.black),
                 textAlign: TextAlign.left,
               ),
             )
           : null,
-      body: _getCurrentPage(),
+      body: _getCurrentPage(bottomNavIndex),
       floatingActionButton: Visibility(
-        visible: _bottomNavIndex == 0,
+        visible: bottomNavIndex == 0,
         child: FloatingActionButton(
           onPressed: () => _showAddSubscriptionModal(context),
           backgroundColor: Colors.black,
@@ -720,9 +752,9 @@ class _HomePageState extends State<HomePage> {
             curve: Curves.easeInOut,
             height: 57.0,
             padding: EdgeInsets.fromLTRB(
-              _bottomNavIndex == 0 ? 5.0 : 25.0,
+              bottomNavIndex == 0 ? 5.0 : 25.0,
               5.5,
-              _bottomNavIndex == 3 ? 5.0 : 25.0,
+              bottomNavIndex == 3 ? 5.0 : 25.0,
               5.0,
             ),
             decoration: BoxDecoration(
@@ -732,9 +764,10 @@ class _HomePageState extends State<HomePage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: List.generate(_navItems.length, (index) {
-                bool isSelected = _bottomNavIndex == index;
+                bool isSelected = bottomNavIndex == index;
                 return GestureDetector(
-                  onTap: () => setState(() => _bottomNavIndex = index),
+                  onTap: () =>
+                      ref.read(bottomNavIndexProvider.notifier).set(index),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     curve: Curves.easeInOut,
@@ -794,7 +827,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHomePage() {
-    if (currentUserId.isEmpty || _groupsStream == null) {
+    final authState = ref.watch(authStateProvider);
+    final currentUserId = authState.value?.uid ?? "";
+    final filterIndex = ref.watch(filterIndexProvider);
+    final groupsAsync = ref.watch(groupsStreamProvider);
+
+    if (currentUserId.isEmpty) {
       return ListView(
         padding: const EdgeInsets.only(left: 15.0, right: 15.0, bottom: 100),
         children: [
@@ -805,27 +843,19 @@ class _HomePageState extends State<HomePage> {
             style: TextStyle(fontWeight: FontWeight.w500),
           ),
           const SizedBox(height: 20.0),
-          _buildFilterBar(),
+          _buildFilterBar(filterIndex),
           const SizedBox(height: 15.0),
           const Center(child: Text("Please login to view subscriptions")),
         ],
       );
     }
 
-    // Single StreamBuilder — stream is never recreated when filter changes
-    return StreamBuilder<QuerySnapshot>(
-      stream: _groupsStream,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(child: Text("Error: ${snapshot.error}"));
-        }
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    return groupsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stack) => Center(child: Text("Error: $error")),
+      data: (snapshot) {
+        final allDocs = snapshot.docs;
 
-        final allDocs = snapshot.data?.docs ?? [];
-
-        // Calculate total due from ALL groups (unfiltered)
         double totalDue = 0.0;
         for (var doc in allDocs) {
           final data = doc.data() as Map<String, dynamic>;
@@ -846,22 +876,18 @@ class _HomePageState extends State<HomePage> {
           }
         }
 
-        // In-memory filter — no stream recreation, no flicker
         List<DocumentSnapshot> filteredDocs;
-        if (_filterIndex == 1) {
-          // Host only
+        if (filterIndex == 1) {
           filteredDocs = allDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
             return data['createdBy'] == currentUserId;
           }).toList();
-        } else if (_filterIndex == 2) {
-          // Member only (not host)
+        } else if (filterIndex == 2) {
           filteredDocs = allDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
             return data['createdBy'] != currentUserId;
           }).toList();
         } else {
-          // All
           filteredDocs = allDocs;
         }
 
@@ -875,7 +901,7 @@ class _HomePageState extends State<HomePage> {
               style: TextStyle(fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 20.0),
-            _buildFilterBar(),
+            _buildFilterBar(filterIndex),
             const SizedBox(height: 15.0),
             if (filteredDocs.isEmpty)
               const Center(
@@ -1013,7 +1039,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildFilterBar() {
+  Widget _buildFilterBar(int filterIndex) {
     return Container(
       height: 47.0,
       width: double.maxFinite,
@@ -1024,7 +1050,7 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.all(5.0),
       child: Row(
         children: List.generate(_menuItems.length, (index) {
-          bool isSelected = _filterIndex == index;
+          bool isSelected = filterIndex == index;
           return Expanded(
             child: GestureDetector(
               onTap: () => _onFilterChanged(index),

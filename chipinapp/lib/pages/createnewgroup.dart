@@ -2,16 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 import 'dart:math';
 
-class CreateNewGroupPage extends StatefulWidget {
+class CreateNewGroupPage extends ConsumerStatefulWidget {
   const CreateNewGroupPage({super.key});
 
   @override
-  State<CreateNewGroupPage> createState() => _CreateNewGroupPageState();
+  ConsumerState<CreateNewGroupPage> createState() => _CreateNewGroupPageState();
 }
 
-class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
+class _CreateNewGroupPageState extends ConsumerState<CreateNewGroupPage> {
   String? _selectedService;
   String? _selectedDurationUnit = "Months";
   String? _selectedBank;
@@ -157,24 +159,12 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                             setState(() => _isLoading = true);
 
                             try {
+                              // ✅ 1. ดึง User ID จาก Firebase Auth
                               final user = FirebaseAuth.instance.currentUser;
-
-                              // ดึง username จาก Firestore แทน displayName
-                              String creatorName = 'Host';
-                              if (user != null) {
-                                final userDoc = await FirebaseFirestore.instance
-                                    .collection('users')
-                                    .doc(user.uid)
-                                    .get();
-                                if (userDoc.exists) {
-                                  final userData =
-                                      userDoc.data() as Map<String, dynamic>;
-                                  creatorName =
-                                      userData['username'] ??
-                                      userData['email'] ??
-                                      'Host';
-                                }
-                              }
+                              
+                              // ✅ 2. ดึง Username จาก Riverpod แทนการยิง Query Database ใหม่
+                              final userProfile = ref.read(userProfileProvider).value;
+                              String creatorName = userProfile?.username ?? user?.email ?? 'Host';
 
                               // คำนวณวันหมดอายุ
                               DateTime endDate = DateTime.now();
@@ -225,7 +215,7 @@ class _CreateNewGroupPageState extends State<CreateNewGroupPage> {
                                     'maxSlots': _slotsOpen,
                                     'availableSlots': _slotsOpen,
                                     'createdBy': user?.uid,
-                                    'creatorName': creatorName,
+                                    'creatorName': creatorName, // ✅ ใช้ตัวแปรที่ดึงจาก Riverpod
                                     'memberNames': {
                                       if (user != null) user.uid: creatorName,
                                     },

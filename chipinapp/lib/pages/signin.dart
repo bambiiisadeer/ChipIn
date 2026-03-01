@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
 import '../pages/signup.dart';
-import '../pages/home.dart';
+import '../pages/home.dart'; // ✅ สำคัญ: ทำให้เราเข้าถึง bottomNavIndexProvider และ filterIndexProvider ได้
 import '../services/auth_service.dart';
 
-class SigninPage extends StatefulWidget {
+class SigninPage extends ConsumerStatefulWidget {
   const SigninPage({super.key, this.fromSignup = false});
 
   final bool fromSignup;
 
   @override
-  State<SigninPage> createState() => _SigninPageState();
+  ConsumerState<SigninPage> createState() => _SigninPageState();
 }
 
-class _SigninPageState extends State<SigninPage>
+class _SigninPageState extends ConsumerState<SigninPage>
     with SingleTickerProviderStateMixin {
   bool _obscureText = true;
   late AnimationController _fadeController;
@@ -69,6 +70,11 @@ class _SigninPageState extends State<SigninPage>
       setState(() => _isSignInLoading = false);
 
       if (result == null) {
+        // ✅ ล้างค่า UI ทั้งหมดให้กลับไปเริ่มที่หน้า Home (Tab 0) และหมวด All (Filter 0)
+        ref.invalidate(bottomNavIndexProvider);
+        ref.invalidate(filterIndexProvider);
+        ref.invalidate(userProfileProvider);
+        
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
@@ -90,6 +96,11 @@ class _SigninPageState extends State<SigninPage>
       setState(() => _isGoogleLoading = false);
 
       if (result != null) {
+        // ✅ ล้างค่า UI ทั้งหมดให้กลับไปเริ่มที่หน้า Home (Tab 0) และหมวด All (Filter 0)
+        ref.invalidate(bottomNavIndexProvider);
+        ref.invalidate(filterIndexProvider);
+        ref.invalidate(userProfileProvider);
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomePage()),
@@ -207,7 +218,6 @@ class _SigninPageState extends State<SigninPage>
                       ),
                     ),
                     const SizedBox(height: 35.0),
-                    // ปุ่ม Sign in — spinner เฉพาะปุ่มนี้เท่านั้น
                     GestureDetector(
                       onTap: _isAnyLoading ? null : _handleLogin,
                       child: Container(
@@ -218,8 +228,12 @@ class _SigninPageState extends State<SigninPage>
                         ),
                         child: Center(
                           child: _isSignInLoading
-                              ? const CircularProgressIndicator(
-                                  color: Colors.white,
+                              ? const SizedBox(
+                                  width: 20, height: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
                                 )
                               : const Text(
                                   "Sign in",
@@ -236,20 +250,18 @@ class _SigninPageState extends State<SigninPage>
                 opacity: _fadeAnimation,
                 child: Column(
                   children: [
-                    Center(
+                    const Center(
                       child: Text(
                         "Or  sign in with",
                         style: TextStyle(
-                          color: const Color.fromARGB(255, 92, 94, 98),
+                          color: Color.fromARGB(255, 92, 94, 98),
                         ),
                       ),
                     ),
                     const SizedBox(height: 17.0),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      spacing: 30.0,
                       children: [
-                        // ปุ่ม Google — spinner เฉพาะปุ่มนี้เท่านั้น
                         GestureDetector(
                           onTap: _isAnyLoading ? null : _handleGoogleSignIn,
                           child: Container(
@@ -262,15 +274,17 @@ class _SigninPageState extends State<SigninPage>
                             ),
                             child: _isGoogleLoading
                                 ? const Padding(
-                                    padding: EdgeInsets.all(10.0),
+                                    padding: EdgeInsets.all(12.0),
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
                                       color: Colors.black,
                                     ),
                                   )
-                                : Image.asset(
-                                    "assets/images/googlelogo.png",
-                                    height: 24.0,
+                                : Center(
+                                    child: Image.asset(
+                                      "assets/images/googlelogo.png",
+                                      height: 24.0,
+                                    ),
                                   ),
                           ),
                         ),
@@ -283,15 +297,15 @@ class _SigninPageState extends State<SigninPage>
               FadeTransition(
                 opacity: _fadeAnimation,
                 child: Row(
-                  spacing: 10.0,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
+                    const Text(
                       "Don't have any account?",
                       style: TextStyle(
-                        color: const Color.fromARGB(255, 92, 94, 98),
+                        color: Color.fromARGB(255, 92, 94, 98),
                       ),
                     ),
+                    const SizedBox(width: 10.0), // ✅ ใช้ SizedBox ป้องกัน Error
                     GestureDetector(
                       onTap: _isAnyLoading
                           ? null

@@ -1,25 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
 import 'dart:async';
 import 'dart:math';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 
-
-class HostGroupDetailsPage extends StatefulWidget {
+class HostGroupDetailsPage extends ConsumerStatefulWidget {
   final Map<String, dynamic> subscription;
 
   const HostGroupDetailsPage({super.key, required this.subscription});
 
   @override
-  State<HostGroupDetailsPage> createState() => _HostGroupDetailsPageState();
+  ConsumerState<HostGroupDetailsPage> createState() =>
+      _HostGroupDetailsPageState();
 }
 
-class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
+class _HostGroupDetailsPageState extends ConsumerState<HostGroupDetailsPage> {
   bool _isCopied = false;
   bool _showInMarket = false;
   late String _inviteCode;
-  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
 
   @override
   void initState() {
@@ -70,7 +70,7 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
 
   Future<void> _deleteGroup() async {
     final String? docId = widget.subscription['id'];
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(); // ปิด Dialog ยืนยัน
 
     if (docId != null) {
       showDialog(
@@ -87,8 +87,8 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
             .delete();
 
         if (mounted) {
-          Navigator.of(context).pop();
-          Navigator.of(context).pop();
+          Navigator.of(context).pop(); // ปิด loading
+          Navigator.of(context).pop(); // ออกจากหน้ารายละเอียดกลุ่ม
         }
       } catch (e) {
         if (mounted) {
@@ -190,6 +190,8 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
   @override
   Widget build(BuildContext context) {
     final String groupId = widget.subscription['id'] ?? '';
+    // ✅ ดึง ID ของตัวเองจาก Riverpod Provider
+    final String currentUserId = ref.watch(authStateProvider).value?.uid ?? "";
 
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
@@ -443,9 +445,12 @@ class _HostGroupDetailsPageState extends State<HostGroupDetailsPage> {
         statusTextColor = const Color.fromARGB(255, 255, 183, 0);
         break;
       case "Unpaid":
-      default:
         statusBgColor = const Color.fromARGB(255, 255, 214, 214);
         statusTextColor = const Color.fromARGB(255, 177, 6, 15);
+        break;
+      default:
+        statusBgColor = const Color(0xFFDBEEFF);
+        statusTextColor = const Color(0xFF1A7FD4);
         break;
     }
 

@@ -17,24 +17,27 @@ class UserModel {
     required this.createdAt,
   });
 
-  // แปลงจาก JSON (Firestore) เป็น Object
-  factory UserModel.fromJson(Map<String, dynamic> json) {
-  return UserModel(
-    id: json['uid'] ?? '', // AuthService ใช้ 'uid'
-    username: json['username'] ?? 'User',
-    email: json['email'] ?? '',
-    authProvider: json['auth_provider'] ?? 'email', // AuthService ใช้ 'auth_provider'
-    averageRating: (json['average_rating'] ?? 0.0).toDouble(), // AuthService ใช้ 'average_rating'
-    createdAt: json['created_at'] != null 
-        ? (json['created_at'] as Timestamp).toDate() 
-        : DateTime.now(),
-  );
-}
+  // ✅ เปลี่ยนชื่อเป็น fromFirestore หรือจะเพิ่มไว้ทั้ง 2 ชื่อเลยก็ได้ครับ
+  // ผมปรับให้รองรับข้อมูลจาก AuthService (uid) และ Firestore (created_at) ให้เป๊ะขึ้น
+  factory UserModel.fromFirestore(Map<String, dynamic> json) {
+    return UserModel(
+      id: json['uid'] ?? json['id'] ?? '', // รองรับทั้ง 'uid' และ 'id'
+      username: json['username'] ?? 'User',
+      email: json['email'] ?? '',
+      authProvider: json['auth_provider'] ?? 'email',
+      averageRating: (json['average_rating'] ?? 0.0).toDouble(),
+      createdAt: json['created_at'] != null 
+          ? (json['created_at'] as Timestamp).toDate() 
+          : DateTime.now(),
+    );
+  }
 
-  // แปลงจาก Object เป็น JSON เพื่อบันทึกลง Firestore
+  // เผื่อคุณยังอยากใช้ชื่อเดิมในส่วนอื่นของโปรเจกต์
+  factory UserModel.fromJson(Map<String, dynamic> json) => UserModel.fromFirestore(json);
+
   Map<String, dynamic> toJson() {
     return {
-      'id': id,
+      'uid': id, // ใช้ 'uid' เพื่อให้ตรงกับในฐานข้อมูลที่คุณใช้อยู่
       'username': username,
       'email': email,
       'auth_provider': authProvider,

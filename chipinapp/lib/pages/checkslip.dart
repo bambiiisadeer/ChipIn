@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ เพิ่ม Riverpod
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้
 
-class CheckSlipPage extends StatefulWidget {
+// ✅ เปลี่ยนเป็น ConsumerStatefulWidget
+class CheckSlipPage extends ConsumerStatefulWidget {
   final DocumentSnapshot notificationDoc;
 
   const CheckSlipPage({super.key, required this.notificationDoc});
 
   @override
-  State<CheckSlipPage> createState() => _CheckSlipPageState();
+  ConsumerState<CheckSlipPage> createState() => _CheckSlipPageState();
 }
 
-class _CheckSlipPageState extends State<CheckSlipPage> {
+class _CheckSlipPageState extends ConsumerState<CheckSlipPage> {
   bool _isProcessing = false;
 
   Future<void> _handleApprove() async {
@@ -25,9 +27,14 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
 
+      // ✅ 1. ดึงชื่อปัจจุบันของโฮสต์จาก Provider
+      final userProfile = ref.read(userProfileProvider).value;
+      final String currentUserName = userProfile?.username ?? 'Host';
+      final String currentUserId = ref.read(authStateProvider).value?.uid ?? '';
+
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
-      // 1. อัปเดตสถานะ member ใน Group เป็น 'paid'
+      // อัปเดตสถานะ member ใน Group เป็น 'paid'
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId);
@@ -36,10 +43,10 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
         'paymentDeadlines.$memberId': FieldValue.delete(),
       });
 
-      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น approved
+      // อัปเดต Notification เดิม
       batch.update(widget.notificationDoc.reference, {'status': 'approved'});
 
-      // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment approved
+      // ✅ 2. สร้าง Notification ใหม่แจ้ง Member โดยใช้ชื่อจริง
       final DocumentReference replyRef = FirebaseFirestore.instance
           .collection('notifications')
           .doc();
@@ -47,17 +54,19 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
         'type': 'payment_approved',
         'category': 'my_request',
         'toUserId': memberId,
-        'fromUserId': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'fromUserId': currentUserId,
+        'fromUserName':
+            currentUserName, // ✅ ใส่ field นี้เพื่อให้ profile.dart ตามแก้ชื่อได้
         'groupId': groupId,
         'service': serviceName,
         'logo': logo,
-        'message': "Host has approved your payment",
+        'message':
+            "$currentUserName has approved your payment", // ✅ ใช้ชื่อแทนคำว่า Host
         'timestamp': FieldValue.serverTimestamp(),
         'isRead': false,
       });
 
       await batch.commit();
-
       if (mounted) Navigator.pop(context);
     } catch (e) {
       debugPrint("Error approving: $e");
@@ -76,18 +85,20 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
 
+      // ✅ 1. ดึงชื่อปัจจุบันของโฮสต์จาก Provider
+      final userProfile = ref.read(userProfileProvider).value;
+      final String currentUserName = userProfile?.username ?? 'Host';
+      final String currentUserId = ref.read(authStateProvider).value?.uid ?? '';
+
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
-      // 1. เปลี่ยนสถานะกลับเป็น 'unpaid'
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId);
-      batch.update(groupRef, {'memberStatus.$memberId': 'unpaid'});
 
-      // 2. อัปเดต Notification เดิม: เปลี่ยนสถานะเป็น rejected
+      batch.update(groupRef, {'memberStatus.$memberId': 'unpaid'});
       batch.update(widget.notificationDoc.reference, {'status': 'rejected'});
 
-      // 3. สร้าง Notification ใหม่แจ้ง Member ว่า payment rejected
       final DocumentReference replyRef = FirebaseFirestore.instance
           .collection('notifications')
           .doc();
@@ -95,17 +106,18 @@ class _CheckSlipPageState extends State<CheckSlipPage> {
         'type': 'payment_rejected',
         'category': 'my_request',
         'toUserId': memberId,
-        'fromUserId': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'fromUserId': currentUserId,
+        'fromUserName': currentUserName, // ✅ ใส่ field นี้
         'groupId': groupId,
         'service': serviceName,
         'logo': logo,
-        'message': "Host has rejected your payment. Please submit again.",
+        'message':
+            "$currentUserName has rejected your payment. Please submit again.", // ✅ ใช้ชื่อจริง
         'timestamp': FieldValue.serverTimestamp(),
         'isRead': false,
       });
 
       await batch.commit();
-
       if (mounted) Navigator.pop(context);
     } catch (e) {
       debugPrint("Error rejecting: $e");

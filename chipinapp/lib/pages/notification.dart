@@ -1,19 +1,47 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 import 'checkslip.dart';
 
-class NotificationPage extends StatefulWidget {
+// ==========================================
+// 🔴 LOCAL PROVIDERS (สำหรับ UI State หน้า Notification)
+// ==========================================
+
+// 1. Provider จัดการ Tab ที่ถูกเลือก
+class NotificationTabNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+  void set(int value) => state = value;
+}
+final notificationTabProvider = NotifierProvider<NotificationTabNotifier, int>(NotificationTabNotifier.new);
+
+// 2. Provider ดึงข้อมูลแจ้งเตือนของผู้ใช้ (แบบ Real-time)
+final notificationsStreamProvider = StreamProvider.autoDispose<List<DocumentSnapshot>>((ref) {
+  final user = ref.watch(authStateProvider).value;
+  if (user == null) return const Stream.empty();
+
+  return FirebaseFirestore.instance
+      .collection('notifications')
+      .where('toUserId', isEqualTo: user.uid)
+      .orderBy('timestamp', descending: true)
+      .snapshots()
+      .map((snapshot) => snapshot.docs);
+});
+
+
+// ==========================================
+// 🔵 MAIN PAGE
+// ==========================================
+
+class NotificationPage extends ConsumerStatefulWidget { // ✅ เปลี่ยนเป็น ConsumerStatefulWidget
   const NotificationPage({super.key});
 
   @override
-  State<NotificationPage> createState() => _NotificationPageState();
+  ConsumerState<NotificationPage> createState() => _NotificationPageState();
 }
 
-class _NotificationPageState extends State<NotificationPage> {
-  int _selectedTab = 0;
-  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
-
+class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ เปลี่ยนเป็น ConsumerState
   final List<String> _tabs = [
     "All",
     "My Request",
@@ -24,28 +52,24 @@ class _NotificationPageState extends State<NotificationPage> {
 
   Future<void> _handleApprove(DocumentSnapshot notifDoc) async {
     try {
+      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; // ✅ ใช้ Riverpod ดึง UID
+      if (currentUserId.isEmpty) return;
+
       final data = notifDoc.data() as Map<String, dynamic>;
       final String groupId = data['groupId'];
       final String requestUserId = data['fromUserId'];
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
 
-      // เก็บข้อความเดิมไว้ก่อน (เช่น "UserA want to join your group")
       final String originalMessage = data['message'] ?? "";
 
-      // ดึง serviceEmail จาก notification ก่อน
-      // ถ้าไม่มี (notification เก่า) ให้ fallback ไปดึงจาก memberEmails ใน group doc
       String serviceEmail = data['serviceEmail'] ?? '';
       if (serviceEmail.isEmpty) {
         try {
-          final groupDoc = await FirebaseFirestore.instance
-              .collection('groups')
-              .doc(groupId)
-              .get();
+          final groupDoc = await FirebaseFirestore.instance.collection('groups').doc(groupId).get();
           if (groupDoc.exists) {
             final groupData = groupDoc.data() as Map<String, dynamic>;
-            final memberEmails =
-                groupData['memberEmails'] as Map<String, dynamic>? ?? {};
+            final memberEmails = groupData['memberEmails'] as Map<String, dynamic>? ?? {};
             serviceEmail = memberEmails[requestUserId] ?? '';
           }
         } catch (e) {
@@ -54,12 +78,8 @@ class _NotificationPageState extends State<NotificationPage> {
       }
 
       final DateTime deadline = DateTime.now().add(const Duration(hours: 24));
-
       final WriteBatch batch = FirebaseFirestore.instance.batch();
-
-      final DocumentReference groupRef = FirebaseFirestore.instance
-          .collection('groups')
-          .doc(groupId);
+      final DocumentReference groupRef = FirebaseFirestore.instance.collection('groups').doc(groupId);
 
       batch.update(groupRef, {
         'memberStatus.$requestUserId': 'unpaid',
@@ -67,20 +87,15 @@ class _NotificationPageState extends State<NotificationPage> {
         'availableSlots': FieldValue.increment(-1),
       });
 
-      // --- ส่วนที่แก้ไข: สร้างข้อความใหม่สำหรับ Host ---
       String updatedHostMessage = originalMessage;
       if (serviceEmail.isNotEmpty) {
-        // ต่อท้ายด้วย email ถ้ามี
         updatedHostMessage = "$originalMessage with email $serviceEmail";
       }
 
-      // อัปเดตทั้ง status และ message ใหม่ลงไปที่ Notification ของ Host
       batch.update(notifDoc.reference, {
         'status': 'accept',
-        'message':
-            updatedHostMessage, // <--- เพิ่มบรรทัดนี้เพื่อให้ข้อความเปลี่ยน
+        'message': updatedHostMessage,
       });
-      // ---------------------------------------------
 
       final String day = deadline.day.toString().padLeft(2, '0');
       final String month = deadline.month.toString().padLeft(2, '0');
@@ -89,14 +104,15 @@ class _NotificationPageState extends State<NotificationPage> {
       final String minute = deadline.minute.toString().padLeft(2, '0');
       final String dateStr = "$day-$month-$year $hour:$minute";
 
-      final DocumentReference replyRef = FirebaseFirestore.instance
-          .collection('notifications')
-          .doc();
+      final DocumentReference replyRef = FirebaseFirestore.instance.collection('notifications').doc();
 
-      // ข้อความสำหรับส่งกลับไปหา User ที่ขอ join (อันนี้โค้ดเดิมถูกแล้ว)
+      // ดึงชื่อ Host จาก ProfileProvider (ถ้าเป็นไปได้) เพื่อให้ได้ชื่อที่อัปเดตล่าสุด
+      final userProfile = ref.read(userProfileProvider).value;
+      final hostName = userProfile?.username ?? "Host";
+
       final String approveMessage = serviceEmail.isNotEmpty
-          ? "Host has been approve your request with email $serviceEmail"
-          : "Host has been approve your request";
+          ? "$hostName has been approve your request with email $serviceEmail"
+          : "$hostName has been approve your request";
 
       batch.set(replyRef, {
         'type': 'approved',
@@ -120,6 +136,9 @@ class _NotificationPageState extends State<NotificationPage> {
 
   Future<void> _handleReject(DocumentSnapshot notifDoc) async {
     try {
+      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; // ✅ ใช้ Riverpod ดึง UID
+      if (currentUserId.isEmpty) return;
+
       final data = notifDoc.data() as Map<String, dynamic>;
       final String groupId = data['groupId'];
       final String requestUserId = data['fromUserId'];
@@ -128,9 +147,7 @@ class _NotificationPageState extends State<NotificationPage> {
 
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
-      final DocumentReference groupRef = FirebaseFirestore.instance
-          .collection('groups')
-          .doc(groupId);
+      final DocumentReference groupRef = FirebaseFirestore.instance.collection('groups').doc(groupId);
       batch.update(groupRef, {
         'members': FieldValue.arrayRemove([requestUserId]),
         'memberStatus.$requestUserId': FieldValue.delete(),
@@ -138,9 +155,11 @@ class _NotificationPageState extends State<NotificationPage> {
 
       batch.update(notifDoc.reference, {'status': 'reject'});
 
-      final DocumentReference replyRef = FirebaseFirestore.instance
-          .collection('notifications')
-          .doc();
+      final DocumentReference replyRef = FirebaseFirestore.instance.collection('notifications').doc();
+      
+      final userProfile = ref.read(userProfileProvider).value;
+      final hostName = userProfile?.username ?? "Host";
+      
       batch.set(replyRef, {
         'type': 'rejected',
         'category': 'my_request',
@@ -149,7 +168,7 @@ class _NotificationPageState extends State<NotificationPage> {
         'groupId': groupId,
         'service': serviceName,
         'logo': logo,
-        'message': "Host has been reject your request",
+        'message': "$hostName has been reject your request",
         'timestamp': FieldValue.serverTimestamp(),
         'isRead': false,
       });
@@ -188,6 +207,9 @@ class _NotificationPageState extends State<NotificationPage> {
   }
 
   Widget _buildTabSection() {
+    // ✅ ดึง Tab จาก Provider
+    final selectedTab = ref.watch(notificationTabProvider);
+
     return SizedBox(
       height: 40.0,
       child: ListView.builder(
@@ -198,15 +220,15 @@ class _NotificationPageState extends State<NotificationPage> {
           return Padding(
             padding: const EdgeInsets.only(right: 10.0),
             child: GestureDetector(
-              onTap: () => setState(() => _selectedTab = index),
+              onTap: () => ref.read(notificationTabProvider.notifier).set(index), // ✅ อัปเดต Tab ผ่าน Provider
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 18.0),
                 decoration: BoxDecoration(
-                  color: _selectedTab == index
+                  color: selectedTab == index
                       ? Colors.black
                       : const Color(0xFFEDEDED),
                   border: Border.all(
-                    color: _selectedTab == index
+                    color: selectedTab == index
                         ? Colors.black
                         : const Color(0xFFEDEDED),
                   ),
@@ -216,7 +238,7 @@ class _NotificationPageState extends State<NotificationPage> {
                   child: Text(
                     _tabs[index],
                     style: TextStyle(
-                      color: _selectedTab == index
+                      color: selectedTab == index
                           ? Colors.white
                           : Colors.black,
                       fontWeight: FontWeight.w400,
@@ -233,46 +255,38 @@ class _NotificationPageState extends State<NotificationPage> {
   }
 
   Widget _buildNotificationList() {
-    final Query query = FirebaseFirestore.instance
-        .collection('notifications')
-        .where('toUserId', isEqualTo: currentUserId)
-        .orderBy('timestamp', descending: true);
+    // ✅ ดึงข้อมูล List จาก Provider
+    final notificationsAsync = ref.watch(notificationsStreamProvider);
+    final selectedTab = ref.watch(notificationTabProvider);
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(child: Text("Error: ${snapshot.error}"));
-        }
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+    return notificationsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stack) => Center(child: Text("Error: $error")),
+      data: (docs) {
+        if (docs.isEmpty) {
           return const Center(child: Text("No notifications"));
         }
 
-        var docs = snapshot.data!.docs;
+        List<DocumentSnapshot> filteredDocs = docs;
 
-        if (_selectedTab == 1) {
-          docs = docs.where((d) => d['category'] == 'my_request').toList();
-        } else if (_selectedTab == 2) {
-          docs = docs
-              .where((d) => d['category'] == 'incoming_request')
-              .toList();
-        } else if (_selectedTab == 3) {
-          docs = docs.where((d) => d['category'] == 'check_slip').toList();
-        } else if (_selectedTab == 4) {
-          docs = docs.where((d) => d['category'] == 'due_date').toList();
+        if (selectedTab == 1) {
+          filteredDocs = docs.where((d) => (d.data() as Map<String, dynamic>)['category'] == 'my_request').toList();
+        } else if (selectedTab == 2) {
+          filteredDocs = docs.where((d) => (d.data() as Map<String, dynamic>)['category'] == 'incoming_request').toList();
+        } else if (selectedTab == 3) {
+          filteredDocs = docs.where((d) => (d.data() as Map<String, dynamic>)['category'] == 'check_slip').toList();
+        } else if (selectedTab == 4) {
+          filteredDocs = docs.where((d) => (d.data() as Map<String, dynamic>)['category'] == 'due_date').toList();
         }
 
-        if (docs.isEmpty) {
+        if (filteredDocs.isEmpty) {
           return const Center(child: Text("No notifications"));
         }
 
         return ListView.builder(
           padding: const EdgeInsets.symmetric(horizontal: 15.0),
-          itemCount: docs.length,
-          itemBuilder: (context, index) => _buildNotificationCard(docs[index]),
+          itemCount: filteredDocs.length,
+          itemBuilder: (context, index) => _buildNotificationCard(filteredDocs[index]),
         );
       },
     );

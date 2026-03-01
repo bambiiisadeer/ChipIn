@@ -1,57 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
 
-class HostProfilePage extends StatefulWidget {
-  final String hostUserId;
-  final String hostUsername;
+// ==========================================
+// 🔴 LOCAL PROVIDERS
+// ==========================================
 
-  const HostProfilePage({
-    super.key,
-    required this.hostUserId,
-    required this.hostUsername,
-  });
-
-  @override
-  State<HostProfilePage> createState() => _HostProfilePageState();
-}
-
-class _HostProfilePageState extends State<HostProfilePage> {
-  List<Map<String, dynamic>> _reviews = [];
-  double _averageRating = 0.0;
-  bool _isLoadingReviews = true;
-  String _username = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _username = widget.hostUsername;
-    _loadHostUsername();
-    _loadReviews();
-  }
-
-  Future<void> _loadHostUsername() async {
-    try {
+// 1. ดึงข้อมูล User ของ Host
+final hostProfileProvider = FutureProvider.family
+    .autoDispose<Map<String, dynamic>?, String>((ref, hostUserId) async {
+      if (hostUserId.isEmpty) return null;
       final doc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(widget.hostUserId)
+          .doc(hostUserId)
           .get();
+      return doc.exists ? doc.data() : null;
+    });
 
-      if (doc.exists && mounted) {
-        final data = doc.data();
-        setState(() {
-          _username = data?['username'] ?? widget.hostUsername;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error loading host username: $e");
-    }
-  }
-
-  Future<void> _loadReviews() async {
-    try {
+// 2. ดึงรีวิวของ Host
+final hostReviewsProvider = FutureProvider.family
+    .autoDispose<List<Map<String, dynamic>>, String>((ref, hostUserId) async {
+      if (hostUserId.isEmpty) return [];
       final querySnapshot = await FirebaseFirestore.instance
           .collection('reviews')
-          .where('hostUserId', isEqualTo: widget.hostUserId)
+          .where('hostUserId', isEqualTo: hostUserId)
           .get();
 
       final reviews = querySnapshot.docs.map((doc) => doc.data()).toList();
@@ -65,24 +37,23 @@ class _HostProfilePageState extends State<HostProfilePage> {
         return bTime.compareTo(aTime);
       });
 
-      double total = 0;
-      for (var r in reviews) {
-        total += (r['rating'] as num).toDouble();
-      }
-      final avg = reviews.isEmpty ? 0.0 : total / reviews.length;
+      return reviews;
+    });
 
-      if (mounted) {
-        setState(() {
-          _reviews = reviews;
-          _averageRating = avg;
-          _isLoadingReviews = false;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error loading reviews: $e");
-      if (mounted) setState(() => _isLoadingReviews = false);
-    }
-  }
+// ==========================================
+// 🔵 MAIN PAGE
+// ==========================================
+
+class HostProfilePage extends ConsumerWidget {
+  // ✅ เปลี่ยนเป็น ConsumerWidget
+  final String hostUserId;
+  final String hostUsername;
+
+  const HostProfilePage({
+    super.key,
+    required this.hostUserId,
+    required this.hostUsername,
+  });
 
   Widget _buildStarRow(double avg) {
     return Row(
@@ -215,8 +186,28 @@ class _HostProfilePageState extends State<HostProfilePage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final int reviewCount = _reviews.length;
+  Widget build(BuildContext context, WidgetRef ref) {
+    // ✅ เพิ่ม ref
+
+    // ดึงข้อมูลจาก Provider
+    final hostProfileAsync = ref.watch(hostProfileProvider(hostUserId));
+    final reviewsAsync = ref.watch(hostReviewsProvider(hostUserId));
+
+    // ประมวลผลชื่อและเรตติ้ง
+    final String displayUsername =
+        hostProfileAsync.value?['username'] ?? hostUsername;
+    final List<Map<String, dynamic>> reviews = reviewsAsync.value ?? [];
+
+    final int reviewCount = reviews.length;
+    double averageRating = 0.0;
+
+    if (reviewCount > 0) {
+      double total = 0;
+      for (var r in reviews) {
+        total += (r['rating'] as num).toDouble();
+      }
+      averageRating = total / reviewCount;
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -225,7 +216,7 @@ class _HostProfilePageState extends State<HostProfilePage> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -244,7 +235,9 @@ class _HostProfilePageState extends State<HostProfilePage> {
               ),
               child: Center(
                 child: Text(
-                  _username.isNotEmpty ? _username[0].toUpperCase() : "U",
+                  displayUsername.isNotEmpty
+                      ? displayUsername[0].toUpperCase()
+                      : "U",
                   style: const TextStyle(
                     fontSize: 48,
                     fontWeight: FontWeight.w500,
@@ -254,15 +247,27 @@ class _HostProfilePageState extends State<HostProfilePage> {
               ),
             ),
             const SizedBox(height: 20),
-            // Username
-            Text(
-              _username,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.black,
+            // Username (Show loading state slightly if loading)
+            hostProfileAsync.when(
+              loading: () => const SizedBox(
+                height: 20,
+                width: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              error: (err, stack) => Text(
+                "Error: $err",
+                style: const TextStyle(color: Colors.red),
+              ),
+              data: (_) => Text(
+                displayUsername,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.black,
+                ),
               ),
             ),
+
             const SizedBox(height: 30),
             // Rating Section
             Row(
@@ -271,7 +276,7 @@ class _HostProfilePageState extends State<HostProfilePage> {
               children: [
                 Row(
                   children: [
-                    _buildStarRow(_averageRating),
+                    _buildStarRow(averageRating),
                     const SizedBox(width: 10),
                     Text(
                       "($reviewCount)",
@@ -296,10 +301,10 @@ class _HostProfilePageState extends State<HostProfilePage> {
                           children: [
                             TextSpan(
                               text:
-                                  _averageRating ==
-                                      _averageRating.truncateToDouble()
-                                  ? _averageRating.toInt().toString()
-                                  : _averageRating.toStringAsFixed(1),
+                                  averageRating ==
+                                      averageRating.truncateToDouble()
+                                  ? averageRating.toInt().toString()
+                                  : averageRating.toStringAsFixed(1),
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w500,
@@ -322,18 +327,23 @@ class _HostProfilePageState extends State<HostProfilePage> {
             const SizedBox(height: 20),
             // Reviews List
             Expanded(
-              child: _isLoadingReviews
-                  ? const Center(
-                      child: CircularProgressIndicator(color: Colors.black),
-                    )
-                  : reviewCount == 0
-                  ? const SizedBox.shrink()
-                  : ListView.separated(
-                      itemCount: reviewCount,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) =>
-                          _buildReviewItem(_reviews[index]),
-                    ),
+              child: reviewsAsync.when(
+                loading: () => const Center(
+                  child: CircularProgressIndicator(color: Colors.black),
+                ),
+                error: (err, stack) =>
+                    Center(child: Text("Error loading reviews: $err")),
+                data: (reviewsData) {
+                  if (reviewsData.isEmpty) return const SizedBox.shrink();
+
+                  return ListView.separated(
+                    itemCount: reviewsData.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) =>
+                        _buildReviewItem(reviewsData[index]),
+                  );
+                },
+              ),
             ),
           ],
         ),

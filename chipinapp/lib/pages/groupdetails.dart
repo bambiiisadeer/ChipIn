@@ -1,28 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // ✅ Import Riverpod
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/auth_service.dart'; // ✅ ดึง Provider มาใช้งาน
 import 'addreview.dart';
 
-class GroupDetailsPage extends StatefulWidget {
+class GroupDetailsPage extends ConsumerStatefulWidget {
   final Map<String, dynamic> subscription;
 
   const GroupDetailsPage({super.key, required this.subscription});
 
   @override
-  State<GroupDetailsPage> createState() => _GroupDetailsPageState();
+  ConsumerState<GroupDetailsPage> createState() => _GroupDetailsPageState();
 }
 
-class _GroupDetailsPageState extends State<GroupDetailsPage> {
+class _GroupDetailsPageState extends ConsumerState<GroupDetailsPage> {
   bool _isCopied = false;
   File? _slipImage;
   bool _isSubmitting = false;
   final ImagePicker _picker = ImagePicker();
-  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? "";
 
   String _getBankImage(String? bankName) {
     switch (bankName) {
@@ -68,26 +68,24 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     setState(() => _isSubmitting = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      // ✅ 1. ดึงข้อมูล Auth จาก Provider
+      final user = ref.read(authStateProvider).value;
+      if (user == null) return;
+      final String currentUserId = user.uid;
+
+      // ✅ 2. ดึง Username จาก Provider ได้เลย (โคตรเร็ว ไม่ต้อง Query DB)
+      final userProfile = ref.read(userProfileProvider).value;
+      final String senderName = userProfile?.username ?? 'Member';
 
       final List<int> imageBytes = await _slipImage!.readAsBytes();
       final String base64Slip = base64Encode(imageBytes);
-
-      String senderName = 'Member';
-      DocumentSnapshot userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user?.uid)
-          .get();
-      if (userDoc.exists) {
-        senderName = userDoc['username'] ?? user?.displayName ?? 'Member';
-      }
 
       await FirebaseFirestore.instance.collection('notifications').add({
         'type': 'payment_received',
         'category': 'check_slip',
         'toUserId': sub['createdBy'],
         'fromUserId': currentUserId,
-        'sender': senderName,
+        'sender': senderName, // ✅ เซฟชื่อปัจจุบันลงไป
         'service': sub['serviceName'],
         'logo': sub['logo'],
         'groupId': sub['id'],
@@ -107,16 +105,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       if (mounted) {
         setState(() => _slipImage = null);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text(
+          const SnackBar(
+            content: Text(
               "Payment submitted, waiting for host to verify.",
               style: TextStyle(
-                color: Colors.white, // สีตัวหนังสือ (เช่น สีขาว)
-                // ความหนาตัวหนังสือ
+                color: Colors.white,
               ),
             ),
-            backgroundColor: const Color.fromARGB(255, 30, 30, 30),
-            duration: const Duration(seconds: 2),
+            backgroundColor: Color.fromARGB(255, 30, 30, 30),
+            duration: Duration(seconds: 2),
           ),
         );
       }
@@ -137,6 +134,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   @override
   Widget build(BuildContext context) {
     final String groupId = widget.subscription['id'] ?? '';
+    // ✅ ดึง ID ของตัวเองมาไว้ใช้เช็กสถานะ
+    final String currentUserId = ref.watch(authStateProvider).value?.uid ?? "";
 
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
