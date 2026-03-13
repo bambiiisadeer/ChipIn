@@ -11,7 +11,7 @@ import '../pages/hostgroupdetails.dart';
 import '../pages/notification.dart';
 
 class AppRoutes {
-  static const start = '/';
+  static const start = '/start';
   static const signin = '/signin';
   static const signup = '/signup';
   static const home = '/home';

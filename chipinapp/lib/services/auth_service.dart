@@ -104,6 +104,10 @@ class AuthService {
         password: password,
       );
       await _updateUserData(result.user!, 'email', customUsername: username);
+      
+      // ✅ เพิ่มการเซฟลง LocalStorage หลังสมัครและล็อกอินสำเร็จ
+      await LocalStorage.saveLoginStatus(true);
+      
       return null;
     } catch (e) {
       return e.toString();
@@ -138,6 +142,10 @@ class AuthService {
 
       UserCredential userCredential = await _auth.signInWithCredential(credential);
       await _updateUserData(userCredential.user!, 'google');
+      
+      // ✅ เพิ่มการเซฟลง LocalStorage หลังล็อกอิน Google สำเร็จ
+      await LocalStorage.saveLoginStatus(true);
+      
       return userCredential;
     } catch (e) {
       return null;
@@ -146,7 +154,8 @@ class AuthService {
 
   // ออกจากระบบ
   Future<void> logout() async {
-    await _auth.signOut();
-    await LocalStorage.saveLoginStatus(false);
+    await _auth.signOut(); // 1. ออกจาก Firebase
+    await GoogleSignIn().signOut(); // ✅ 2. เพิ่มบรรทัดนี้! บังคับให้มือถือลืมบัญชี Google เก่า
+    await LocalStorage.saveLoginStatus(false); // 3. อัปเดตสถานะในเครื่อง
   }
 }

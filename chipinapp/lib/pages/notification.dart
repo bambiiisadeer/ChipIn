@@ -34,14 +34,14 @@ final notificationsStreamProvider = StreamProvider.autoDispose<List<DocumentSnap
 // 🔵 MAIN PAGE
 // ==========================================
 
-class NotificationPage extends ConsumerStatefulWidget { // ✅ เปลี่ยนเป็น ConsumerStatefulWidget
+class NotificationPage extends ConsumerStatefulWidget { 
   const NotificationPage({super.key});
 
   @override
   ConsumerState<NotificationPage> createState() => _NotificationPageState();
 }
 
-class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ เปลี่ยนเป็น ConsumerState
+class _NotificationPageState extends ConsumerState<NotificationPage> { 
   final List<String> _tabs = [
     "All",
     "My Request",
@@ -52,7 +52,7 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
 
   Future<void> _handleApprove(DocumentSnapshot notifDoc) async {
     try {
-      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; // ✅ ใช้ Riverpod ดึง UID
+      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; 
       if (currentUserId.isEmpty) return;
 
       final data = notifDoc.data() as Map<String, dynamic>;
@@ -60,8 +60,6 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
       final String requestUserId = data['fromUserId'];
       final String serviceName = data['service'];
       final String logo = data['logo'] ?? '';
-
-      final String originalMessage = data['message'] ?? "";
 
       String serviceEmail = data['serviceEmail'] ?? '';
       if (serviceEmail.isEmpty) {
@@ -87,14 +85,9 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
         'availableSlots': FieldValue.increment(-1),
       });
 
-      String updatedHostMessage = originalMessage;
-      if (serviceEmail.isNotEmpty) {
-        updatedHostMessage = "$originalMessage with email $serviceEmail";
-      }
-
       batch.update(notifDoc.reference, {
         'status': 'accept',
-        'message': updatedHostMessage,
+        'serviceEmail': serviceEmail, 
       });
 
       final String day = deadline.day.toString().padLeft(2, '0');
@@ -106,7 +99,6 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
 
       final DocumentReference replyRef = FirebaseFirestore.instance.collection('notifications').doc();
 
-      // ดึงชื่อ Host จาก ProfileProvider (ถ้าเป็นไปได้) เพื่อให้ได้ชื่อที่อัปเดตล่าสุด
       final userProfile = ref.read(userProfileProvider).value;
       final hostName = userProfile?.username ?? "Host";
 
@@ -118,7 +110,7 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
         'type': 'approved',
         'category': 'my_request',
         'toUserId': requestUserId,
-        'fromUserId': currentUserId,
+        'fromUserId': currentUserId, // Host UID
         'groupId': groupId,
         'service': serviceName,
         'logo': logo,
@@ -136,7 +128,7 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
 
   Future<void> _handleReject(DocumentSnapshot notifDoc) async {
     try {
-      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; // ✅ ใช้ Riverpod ดึง UID
+      final currentUserId = ref.read(authStateProvider).value?.uid ?? ""; 
       if (currentUserId.isEmpty) return;
 
       final data = notifDoc.data() as Map<String, dynamic>;
@@ -164,7 +156,7 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
         'type': 'rejected',
         'category': 'my_request',
         'toUserId': requestUserId,
-        'fromUserId': currentUserId,
+        'fromUserId': currentUserId, // Host UID
         'groupId': groupId,
         'service': serviceName,
         'logo': logo,
@@ -207,7 +199,6 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
   }
 
   Widget _buildTabSection() {
-    // ✅ ดึง Tab จาก Provider
     final selectedTab = ref.watch(notificationTabProvider);
 
     return SizedBox(
@@ -220,7 +211,7 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
           return Padding(
             padding: const EdgeInsets.only(right: 10.0),
             child: GestureDetector(
-              onTap: () => ref.read(notificationTabProvider.notifier).set(index), // ✅ อัปเดต Tab ผ่าน Provider
+              onTap: () => ref.read(notificationTabProvider.notifier).set(index), 
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 18.0),
                 decoration: BoxDecoration(
@@ -255,7 +246,6 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
   }
 
   Widget _buildNotificationList() {
-    // ✅ ดึงข้อมูล List จาก Provider
     final notificationsAsync = ref.watch(notificationsStreamProvider);
     final selectedTab = ref.watch(notificationTabProvider);
 
@@ -341,6 +331,63 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
     return _renderCardContent(doc, data);
   }
 
+  // 🔥 ฟังก์ชันใหม่: ดึงชื่อล่าสุดของคนส่งมาแทนที่ชื่อเก่าแบบ Real-time (Client-Side Join)
+  Widget _buildDynamicMessageText(Map<String, dynamic> data) {
+    final String type = data['type'] ?? '';
+    final String status = data['status'] ?? 'pending';
+    final String fromUserId = data['fromUserId'] ?? '';
+    final String fallbackName = data['fromUserName'] ?? 'Someone';
+    final String email = data['serviceEmail'] ?? '';
+    final String originalMessage = data['message'] ?? '';
+
+    // ถ้าไม่มี fromUserId ก็แสดงข้อความเดิมไปเลย
+    if (fromUserId.isEmpty) {
+      return Text(originalMessage, style: const TextStyle(fontSize: 14.0));
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(fromUserId).snapshots(),
+      builder: (context, snapshot) {
+        String currentName = fallbackName;
+        
+        // ถ้าเจอข้อมูลโปรไฟล์ล่าสุด ให้เอาชื่อล่าสุดมาใช้
+        if (snapshot.hasData && snapshot.data!.exists) {
+          final userData = snapshot.data!.data() as Map<String, dynamic>;
+          currentName = userData['username'] ?? fallbackName;
+        }
+
+        String displayMessage = originalMessage;
+
+        // ประกอบร่างข้อความใหม่โดยใช้ชื่อล่าสุด (currentName)
+        if (type == 'incoming_request') {
+          if (status == 'accept') {
+            displayMessage = email.isNotEmpty
+                ? "$currentName want to join your group with email $email"
+                : "$currentName want to join your group";
+          } else {
+            displayMessage = "$currentName want to join your group";
+          }
+        } else if (type == 'approved') {
+          displayMessage = email.isNotEmpty
+              ? "$currentName has been approve your request with email $email"
+              : "$currentName has been approve your request";
+        } else if (type == 'rejected') {
+          displayMessage = "$currentName has been reject your request";
+        } else {
+          // แจ้งเตือนประเภทอื่นๆ พยายามเอาชื่อล่าสุดไปแทนที่ชื่อเก่าในประโยค
+          if (displayMessage.startsWith(fallbackName)) {
+            displayMessage = displayMessage.replaceFirst(fallbackName, currentName);
+          }
+        }
+
+        return Text(
+          displayMessage,
+          style: const TextStyle(fontSize: 14.0),
+        );
+      },
+    );
+  }
+
   Widget _renderCardContent(DocumentSnapshot doc, Map<String, dynamic> data) {
     final String type = data['type'] ?? '';
     final String status = data['status'] ?? 'pending';
@@ -414,10 +461,10 @@ class _NotificationPageState extends ConsumerState<NotificationPage> { // ✅ �
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        data['message'] ?? '',
-                        style: const TextStyle(fontSize: 14.0),
-                      ),
+                      
+                      // ✅ เรียกใช้ Widget ที่จะดึงชื่ออัปเดตแบบ Real-time
+                      _buildDynamicMessageText(data),
+                      
                       if (data['detail'] != null) ...[
                         const SizedBox(height: 2),
                         Text(

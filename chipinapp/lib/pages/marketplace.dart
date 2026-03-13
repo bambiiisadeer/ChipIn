@@ -143,35 +143,62 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
   //  SEND JOIN REQUEST (🔥 ใช้ Riverpod ดึงชื่อตัวเอง)
   // ------------------------------------------------------------------ //
 
-  Future<void> _sendJoinRequest(
+  // ✅ เปลี่ยนจาก Future<void> เป็น Future<bool> เพื่อคืนค่าสถานะความสำเร็จ
+  Future<bool> _sendJoinRequest(
     BuildContext context,
     Map<String, dynamic> item,
     String serviceEmail,
   ) async {
-    // capture ก่อน async gap
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
-    // ✅ 1. ดึง UID จาก Firebase Auth (หรือจะดึงจาก ref.read(authStateProvider) ก็ได้เหมือนกัน)
+    // ดึง UID จาก Firebase Auth
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final List<dynamic> members = item['members'] ?? [];
-    if (members.contains(user.uid)) {
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text("You are already a member of this group")),
-      );
-      return;
-    }
-
-    if ((item['availableSlots'] ?? 0) <= 0) {
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text("This group is full")),
-      );
-      return;
-    }
+    if (user == null) return false; // ❌ ส่งกลับ false
 
     try {
-      // ✅ 2. ดึง Username ปัจจุบันจาก Riverpod โคตรเร็ว ไม่ต้องเสียเวลา Query!
+      // 🔥 1. เช็กข้อมูลล่าสุดจาก Database ก่อนเสมอ (ป้องกัน Race Condition)
+      final groupDoc = await FirebaseFirestore.instance
+          .collection('groups')
+          .doc(item['id'])
+          .get();
+
+      if (!groupDoc.exists) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text("Sorry, this group no longer exists.")),
+        );
+        return false; // ❌ ส่งกลับ false
+      }
+
+      final freshData = groupDoc.data()!;
+      final bool showInMarket = freshData['showInMarket'] ?? false;
+      final int availableSlots = freshData['availableSlots'] ?? 0;
+      final List<dynamic> currentMembers = freshData['members'] ?? [];
+
+      // 🚨 ดักจับกรณี Host เพิ่งซ่อนกลุ่มไป
+      if (!showInMarket) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text("Sorry, the host just hide this group from the marketplace.")),
+        );
+        return false; // ❌ ส่งกลับ false
+      }
+
+      // 🚨 ดักจับกรณีมีคนอื่นปาดหน้าเข้ากลุ่มไปจนเต็มแล้ว
+      if (availableSlots <= 0) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text("Sorry, this group is already full.")),
+        );
+        return false; // ❌ ส่งกลับ false
+      }
+
+      // 🚨 ดักจับกรณีผู้ใช้เคยกดขอไปแล้วหรือเป็นสมาชิกอยู่แล้ว
+      if (currentMembers.contains(user.uid)) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text("You are already a member of this group.")),
+        );
+        return false; // ❌ ส่งกลับ false
+      }
+
+      // ✅ 2. ข้อมูลถูกต้อง กลุ่มยังว่าง เริ่มทำการส่งคำขอได้เลย!
       final userProfile = ref.read(userProfileProvider).value;
       final String currentUserName = userProfile?.username ?? "Unknown";
 
@@ -180,6 +207,7 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
       final DocumentReference groupRef = FirebaseFirestore.instance
           .collection('groups')
           .doc(item['id']);
+          
       batch.update(groupRef, {
         'members': FieldValue.arrayUnion([user.uid]),
         'memberStatus.${user.uid}': 'pending',
@@ -190,30 +218,35 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
       final DocumentReference notifRef = FirebaseFirestore.instance
           .collection('notifications')
           .doc();
+          
       batch.set(notifRef, {
         'type': 'incoming_request',
         'category': 'incoming_request',
         'toUserId': item['createdBy'],
         'fromUserId': user.uid,
-        'fromUserName': currentUserName, // เก็บชื่อไว้
-        'sender': currentUserName, // สำหรับ fallback
+        'fromUserName': currentUserName, 
+        'sender': currentUserName, 
         'service': item['name'],
         'logo': item['logo'],
         'groupId': item['id'],
         'price': "${item['price']} THB",
         'status': 'pending',
         'timestamp': FieldValue.serverTimestamp(),
-        // ทิ้งข้อความไว้เป็น Fallback เฉยๆ เพราะ NotificationPage เราประกอบร่างเองแล้ว
         'message': "$currentUserName want to join your group",
         'serviceEmail': serviceEmail,
       });
 
+      // สั่งทำงาน Batch
       await batch.commit();
+
+      return true; // ✅ สำเร็จแล้ว ส่งกลับ true!
+
     } catch (e) {
       debugPrint(e.toString());
       scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text("Failed to send request")),
       );
+      return false; // ❌ ส่งกลับ false กรณีเกิด Error
     }
   }
 
@@ -448,21 +481,20 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: () {
+                    // ✅ เปลี่ยนเป็น async
+                    onPressed: () async {
                       if (emailController.text.isNotEmpty) {
                         final email = emailController.text.trim();
-                        final scaffoldMessenger = ScaffoldMessenger.of(context);
+                        // ปิด Modal ปัจจุบันก่อน
                         Navigator.pop(context);
-                        _sendJoinRequest(this.context, item, email).catchError((
-                          e,
-                        ) {
-                          scaffoldMessenger.showSnackBar(
-                            const SnackBar(
-                              content: Text("Failed to send request"),
-                            ),
-                          );
-                        });
-                        _showSuccessModal(this.context);
+
+                        // ✅ รอ (await) รับผลลัพธ์จากฟังก์ชันส่งคำขอ
+                        final bool isSuccess = await _sendJoinRequest(this.context, item, email);
+
+                        // ✅ ถ้าสำเร็จจริงๆ ถึงจะเด้ง Modal Success โชว์
+                        if (isSuccess && mounted) {
+                          _showSuccessModal(this.context);
+                        }
                       }
                     },
                     style: ElevatedButton.styleFrom(

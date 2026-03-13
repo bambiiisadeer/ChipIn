@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ เพิ่ม Import SharedPreferences
 import '../pages/signin.dart';
+import '../pages/home.dart'; // ✅ เพิ่ม Import หน้า Home
 
 class StartPage extends StatefulWidget {
   const StartPage({super.key});
@@ -49,16 +51,21 @@ class _StartPageState extends State<StartPage>
                     });
 
                     // Wait 3 seconds after video ends, then navigate
-                    Future.delayed(const Duration(seconds: 0), () {
+                    Future.delayed(const Duration(seconds: 0), () async {
+                      // ✅ เพิ่ม Logic เช็คสถานะการล็อกอินตรงนี้
+                      final prefs = await SharedPreferences.getInstance();
+                      final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+
                       if (mounted) {
                         _textFadeController.forward();
 
                         Navigator.pushReplacement(
                           context,
                           PageRouteBuilder(
+                            // ✅ เลือกหน้าตามสถานะการล็อกอิน
                             pageBuilder:
                                 (context, animation, secondaryAnimation) =>
-                                    const SigninPage(),
+                                    isLoggedIn ? const HomePage() : const SigninPage(),
                             transitionDuration: const Duration(
                               milliseconds: 900,
                             ),

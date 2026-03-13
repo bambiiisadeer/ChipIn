@@ -11,7 +11,7 @@ class ChipIn extends StatelessWidget {
       theme: ThemeData(fontFamily: 'Poppins'),
       debugShowCheckedModeBanner: false,
       routes: AppRoutes.routes,
-      initialRoute: AppRoutes.start,
+      initialRoute: AppRoutes.start, // บังคับเปิดแอปมาเจอหน้า Start ก่อนเสมอ
     );
   }
 }
